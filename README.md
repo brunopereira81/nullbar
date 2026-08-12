@@ -44,6 +44,21 @@ feature whose past changes when the future is appended is leaking**, whatever
 its source looks like. This one test, run on day one, would have saved us a
 year.
 
+## Install
+
+```bash
+# from a clone (editable — edits are live):
+git clone https://github.com/brunopereira81/prereg && cd prereg
+pip install -e .
+
+# run the examples:
+python examples/01_full_workflow.py
+python examples/02_catch_a_leak.py
+```
+
+Requires Python 3.10+; numpy and pandas (2.x and 3.x both tested in CI).
+PyPI release pending — until then, install from the clone.
+
 ## Quickstart
 
 ```python
