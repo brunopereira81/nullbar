@@ -238,3 +238,15 @@ class TestLeakLint:
             daily = d["c"].resample("1D").last()
             return daily.reindex(d.index, method="ffill")  # same-day close
         assert prefix_replay_check(leaky_mtf, df)["leak"] is True
+
+    def test_bucket_boundary_alignment_cannot_hide_the_leak(self):
+        # Regression: with len divisible by 24, the default cuts all land on
+        # midnight, where the prefix's final day is complete and a daily-
+        # bucket leak is invisible. The offset cuts must still catch it.
+        idx = pd.date_range("2024-01-01", periods=1440, freq="h", tz="UTC")
+        df = pd.DataFrame({"c": np.random.default_rng(2).normal(0, 1, 1440)
+                           .cumsum() + 100}, index=idx)
+        def leaky_mtf(d):
+            daily = d["c"].resample("1D").last()
+            return daily.reindex(d.index, method="ffill")
+        assert prefix_replay_check(leaky_mtf, df)["leak"] is True

@@ -1,5 +1,9 @@
 # prereg
 
+[![tests](https://github.com/brunopereira81/prereg/actions/workflows/test.yml/badge.svg)](https://github.com/brunopereira81/prereg/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 **Pre-registration and honest statistics for trading research.**
 
 Most backtesting tools help you find an edge. This library assumes you will
@@ -83,6 +87,18 @@ architecture, features, horizons, and training breadth, was zero net of
 costs — and we can prove it, which is the point. If your strategy survives
 this harness, you have something. If it doesn't, you found out for the price
 of compute instead of capital.
+
+## Docs & examples
+
+- **[The honest workflow](docs/workflow.md)** — the six steps, each annotated
+  with the production failure it prevents, plus the deflation cheat sheet.
+- **[examples/01_full_workflow.py](examples/01_full_workflow.py)** — the whole
+  sequence end-to-end on synthetic data; runs in seconds, CI-tested.
+- **[examples/02_catch_a_leak.py](examples/02_catch_a_leak.py)** — three
+  features, two leaks, one 50ms check; includes the leak that inspired the
+  library.
+- **[The leak that survived two years](docs/posts/the-leak-that-survived-two-years.md)**
+  — the full story.
 
 ## Status
 

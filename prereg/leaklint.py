@@ -78,8 +78,18 @@ def prefix_replay_check(
     """
     full = pd.DataFrame(feature_fn(data))
     results, leaked = [], False
+    # Two cut points per fraction, 13 rows apart: a single cut can land
+    # exactly on an aggregation boundary (midnight, week start), where a
+    # bucket-level leak is invisible because the prefix's final bucket is
+    # complete. Two cuts at a prime offset cannot both align with any
+    # bucket size that matters. (Found the hard way: the day-boundary case
+    # hid an MTF-style leak from this very check.)
+    cut_points: list[tuple[float, int]] = []
     for frac in cut_fractions:
         k = int(len(data) * frac)
+        cut_points.append((frac, k))
+        cut_points.append((frac, k - 13))
+    for frac, k in cut_points:
         if k < 2:
             continue
         pref = pd.DataFrame(feature_fn(data.iloc[:k]))
