@@ -12,7 +12,23 @@ requires-python = ">=3.10"
 authors = [{ name = "Bruno Pereira" }]
 keywords = ["backtesting", "overfitting", "deflated-sharpe", "pre-registration",
             "quantitative-finance", "leak-detection"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 dependencies = ["numpy>=1.24", "pandas>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/brunopereira81/prereg"
+Repository = "https://github.com/brunopereira81/prereg"
+Issues = "https://github.com/brunopereira81/prereg/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
