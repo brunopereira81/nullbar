@@ -52,8 +52,8 @@ git clone https://github.com/brunopereira81/prereg && cd prereg
 pip install -e .
 
 # run the examples:
-python examples/01_full_workflow.py
-python examples/02_catch_a_leak.py
+python3 examples/01_full_workflow.py
+python3 examples/02_catch_a_leak.py
 ```
 
 Requires Python 3.10+; numpy and pandas (2.x and 3.x both tested in CI).
