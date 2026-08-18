@@ -278,6 +278,25 @@ class TestRegistration:
             name="x", hypothesis="h", design={"hold": 24},
             bar={"t3": "clustered t >= 3.0", "beats_rule": "net > rule net"})
 
+    def test_a_registration_keeps_its_own_name(self):
+        # the bar-validation loop shadowed the `name` parameter, so every
+        # registration froze itself under its LAST condition's name.
+        r = Registration(name="mean-reversion-24h", hypothesis="h",
+                         design={}, bar={"t3": "clustered t >= 3",
+                                         "beats_hold": "net beats hold"})
+        assert r.doc["name"] == "mean-reversion-24h"
+
+    def test_the_name_survives_freezing(self, tmp_path):
+        p = tmp_path / "reg.json"
+        Registration(name="my-study", hypothesis="h", design={},
+                     bar={"t3": "prose"}).freeze(p)
+        assert json.loads(p.read_text())["name"] == "my-study"
+
+    def test_bar_validation_still_names_the_offending_condition(self):
+        with pytest.raises(ValueError, match="beats_hold"):
+            Registration(name="s", hypothesis="h", design={},
+                         bar={"beats_hold": {"metric": "net"}})
+
     def test_freeze_is_immutable(self, tmp_path):
         p = tmp_path / "reg.json"
         r = self._reg()

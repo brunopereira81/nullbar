@@ -116,18 +116,22 @@ class Registration:
         ``worst < 3``, then passed on a null of 2.77. Where both are given,
         a disagreement raises ``BarMismatchError`` instead of picking one.
         """
-        for name, req in bar.items():
+        # NOT ``name`` — this loop shadowed the registration's own name
+        # parameter, so every registration with a non-empty bar was stored
+        # under the name of its LAST condition. Found by the first report
+        # rendered off a frozen file, which is what an artifact is for.
+        for cond, req in bar.items():
             if isinstance(req, dict):
                 missing = {"metric", "op", "value"} - set(req)
                 if missing:
-                    raise ValueError(f"bar[{name!r}] spec is missing "
+                    raise ValueError(f"bar[{cond!r}] spec is missing "
                                      f"{sorted(missing)}")
                 if req["op"] not in _OPS:
                     raise ValueError(
-                        f"bar[{name!r}] op {req['op']!r} is not one of "
+                        f"bar[{cond!r}] op {req['op']!r} is not one of "
                         f"{sorted(_OPS)}")
             elif not isinstance(req, str):
-                raise TypeError(f"bar[{name!r}] must be a string or a spec "
+                raise TypeError(f"bar[{cond!r}] must be a string or a spec "
                                 f"dict, got {type(req).__name__}")
         self.doc: dict[str, Any] = {
             "name": name,
