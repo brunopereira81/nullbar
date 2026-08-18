@@ -68,6 +68,11 @@ someone who was not in the room.
   goes negative the report says outright that resting-fill pricing leaves
   no gross to haircut — which is what the flagship study's own record does.
 
+- **`docs/sample-report.html`** — a finished report on the real study
+  behind this library: the 24h mean-reversion rule over seven years of
+  hourly bars, 32 two-sided cells of search, FAIL on three of four frozen
+  conditions.
+
 ### Notes
 
 - The report reads the record and never recomputes a result from market

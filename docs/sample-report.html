@@ -1,0 +1,91 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>mean-reversion-24h &mdash; nullbar report</title><style>
+:root { --ink:#1a1a1a; --mute:#5f5f5f; --rule:#d8d4cd; --bg:#faf9f7;
+        --pass:#1f6b3a; --fail:#8f2323; --warn:#8a5a00; }
+* { box-sizing:border-box; }
+body { margin:0; padding:2.2rem 1.5rem 4rem; background:var(--bg);
+       color:var(--ink); font:16px/1.55 Georgia, 'Times New Roman', serif; }
+.page { max-width:52rem; margin:0 auto; }
+h1 { font-size:1.6rem; margin:0 0 .2rem; letter-spacing:-.01em; }
+h2 { font-size:1.05rem; margin:2.4rem 0 .6rem; text-transform:uppercase;
+     letter-spacing:.09em; font-family:system-ui,sans-serif;
+     border-bottom:1px solid var(--rule); padding-bottom:.35rem; }
+h2 .n { color:var(--mute); font-weight:400; margin-right:.5rem; }
+p { margin:.5rem 0; }
+.sub { color:var(--mute); font-size:.92rem; margin:0 0 1.4rem; }
+.mono, code, pre, td.num { font-family:'SF Mono',Menlo,Consolas,monospace; }
+table { border-collapse:collapse; width:100%; font-size:.92rem;
+        font-family:system-ui,sans-serif; margin:.4rem 0 .2rem; }
+th { text-align:left; font-weight:600; color:var(--mute); font-size:.78rem;
+     text-transform:uppercase; letter-spacing:.06em;
+     border-bottom:1px solid var(--rule); padding:.35rem .6rem .35rem 0; }
+td { padding:.42rem .6rem .42rem 0; border-bottom:1px solid #ece9e3;
+     vertical-align:top; }
+td.num { text-align:right; white-space:nowrap; }
+.banner { border:1px solid var(--rule); border-left:5px solid var(--mute);
+          background:#fff; padding:1rem 1.2rem; margin:1.2rem 0 .4rem; }
+.banner .verdict { font-size:1.5rem; font-family:system-ui,sans-serif;
+                   font-weight:700; letter-spacing:.02em; }
+.banner.PASS { border-left-color:var(--pass); } .PASS .verdict{color:var(--pass);}
+.banner.FAIL { border-left-color:var(--fail); } .FAIL .verdict{color:var(--fail);}
+.banner.INCOMPLETE,.banner.CONTRADICTED { border-left-color:var(--warn); }
+.INCOMPLETE .verdict,.CONTRADICTED .verdict { color:var(--warn); }
+.tag { font-family:system-ui,sans-serif; font-size:.72rem; font-weight:700;
+       letter-spacing:.05em; padding:.12rem .45rem; border-radius:3px;
+       border:1px solid currentColor; white-space:nowrap; }
+.t-pass{color:var(--pass);} .t-fail{color:var(--fail);}
+.t-missing,.t-invalid{color:var(--warn);}
+ul { margin:.4rem 0; padding-left:1.2rem; } li { margin:.25rem 0; }
+pre { background:#fff; border:1px solid var(--rule); padding:.8rem 1rem;
+      overflow-x:auto; font-size:.78rem; line-height:1.4; }
+.note { color:var(--mute); font-size:.85rem; }
+footer { margin-top:2.6rem; border-top:1px solid var(--rule);
+         padding-top:.9rem; color:var(--mute); font-size:.85rem; }
+@media print {
+  body { background:#fff; padding:0; font-size:11pt; }
+  h2, table, pre, .banner { break-inside:avoid; }
+  h2 { break-after:avoid; }
+}
+</style></head><body><div class="page"><h1>mean-reversion-24h</h1><p class="sub">Pre-registered evaluation report &middot; generated 2026-08-18T18:14:54.426998+00:00 by nullbar 0.5.0</p><div class="banner FAIL"><div class="verdict">FAIL</div><p>At least one registered condition was not met. 3 condition(s) not met.</p><p class="note">Hypothesis: bottom-decile dist_ma168 vs own history mean-reverts over 24h on the 8-symbol EUR universe</p></div><h2><span class="n">1</span>The frozen registration</h2><table><tr><td>Registered</td><td class="num">2026-08-18T18:14:29.730796+00:00</td></tr><tr><td>File</td><td class="num">experiments/mr24.json</td></tr><tr><td>sha256</td><td class="num mono">13a31fa0990a1261f72d94ef3ccdb1926d78697aa37abf0cd90a7bbcd66a0ba2</td></tr><tr><td>Test look spent</td><td class="num">2026-08-18T18:14:54.423632+00:00</td></tr><tr><td>Look bound to this file</td><td class="num">yes</td></tr><tr><td>Registered cell budget</td><td class="num">64</td></tr></table><p class="note">The sha256 above is of exactly the text below, with no trailing newline. Re-hash it to confirm the design and the bar are the ones that were frozen.</p><pre>{
+  "bar": {
+    "gross_2x_cost": {
+      "metric": "gross",
+      "op": "&gt;=",
+      "value": 0.46
+    },
+    "null_flat": {
+      "metric": "null_max_abs_t",
+      "op": "&lt;",
+      "value": 3.0
+    },
+    "t3": {
+      "metric": "t",
+      "op": "&gt;=",
+      "value": 3.0
+    },
+    "year_2022_positive": {
+      "metric": "y2022",
+      "op": "&gt;",
+      "value": 0.0
+    }
+  },
+  "cells_budget": 64,
+  "created_at": "2026-08-18T18:14:29.730796+00:00",
+  "design": {
+    "cost_pct_rt": 0.23,
+    "hold_bars": 24,
+    "oos": "excl 2024-10-01..2026-01-01",
+    "signal": "dist_ma168 &lt;= expanding shifted q10",
+    "universe": [
+      "BTC-EUR",
+      "ETH-EUR",
+      "SOL-EUR",
+      "XRP-EUR",
+      "ADA-EUR",
+      "LINK-EUR",
+      "LTC-EUR",
+      "AVAX-EUR"
+    ]
+  },
+  "hypothesis": "bottom-decile dist_ma168 vs own history mean-reverts over 24h on the 8-symbol EUR universe",
+  "name": "mean-reversion-24h"
+}</pre><h2><span class="n">2</span>The search</h2><table><tr><td>Trials on the ledger</td><td class="num">64</td></tr><tr><td>Ledger</td><td class="num">experiments/trials.jsonl</td></tr><tr><td>Registered cell budget</td><td class="num">64</td></tr><tr><td>Over budget</td><td class="num">no</td></tr><tr><td>Sharpe spread across trials (variance)</td><td class="num">0.013397</td></tr></table><p class="note">Deflation counts cells the way |t| does: a signal tested long and short is one two-sided cell, not two. Cells used below: recorded on the test look.</p><h2><span class="n">3</span>The null control</h2><table><tr><td>Machinery verdict</td><td class="num">yes</td></tr><tr><td>Composition-matched expectation</td><td class="num">0.0975</td></tr><tr><td>Worst |t| vs that expectation</td><td class="num">2.5627</td></tr><tr><td>Unconditional hold, same clustering</td><td class="num">0.0960</td></tr><tr><td>Seeds</td><td class="num">3</td></tr><tr><td>Measured</td><td class="num">yes</td></tr></table><p class="note">A machinery check, not an edge: it asks whether the pipeline invents an effect on scrambled returns beyond what the assets it holds pay unconditionally.</p><h2><span class="n">4</span>The held-out result</h2><table><tr><td>Trades</td><td class="num">1,815</td></tr><tr><td>Clusters (the unit of inference)</td><td class="num">560</td></tr><tr><td>Gross, per trade</td><td class="num">0.2347</td></tr><tr><td>Cluster mean</td><td class="num">0.5969</td></tr><tr><td>Clustered t</td><td class="num">2.4159</td></tr></table><table><tr><th>Year</th><th style="text-align:right">Mean per block</th></tr><tr><td>2019</td><td class="num">-0.7368</td></tr><tr><td>2020</td><td class="num">-0.4368</td></tr><tr><td>2021</td><td class="num">1.4604</td></tr><tr><td>2022</td><td class="num">-0.6160</td></tr><tr><td>2023</td><td class="num">0.5439</td></tr><tr><td>2024</td><td class="num">0.6392</td></tr><tr><td>2026</td><td class="num">-0.0555</td></tr></table><table><tr><td>Unconditional hold, same clustering</td><td class="num">0.0960</td></tr><tr><td>Hold clusters</td><td class="num">2,178</td></tr></table><h2><span class="n">5</span>Fill realism</h2><table><tr><th>Fill assumption</th><th style="text-align:right">n</th><th style="text-align:right">Gross</th></tr><tr><td>assumed</td><td class="num">23,872</td><td class="num">0.0148</td></tr><tr><td>touch</td><td class="num">22,977</td><td class="num">-0.0354</td></tr><tr><td>through</td><td class="num">22,081</td><td class="num">-0.0637</td></tr></table><table><tr><td>Touch / assumed</td><td class="num">-2.3920</td></tr></table><p class="note"><strong>Under resting-fill pricing this record has no gross left to haircut: the touch leg is negative.</strong> The ratio above crosses zero and is not a fraction that survived.</p><p class="note">The entries that never fill are disproportionately the good ones, so the assumed row is an upper bound on what any of this could have executed at.</p><h2><span class="n">6</span>Deflation</h2><table><tr><td>Cells searched</td><td class="num">32</td></tr><tr><td>Degrees of freedom (clusters &minus; 1)</td><td class="num">559</td></tr><tr><td>Observed |t|</td><td class="num">2.4159</td></tr><tr><td>Noise clears this 5% of the time (95th pct)</td><td class="num">3.1736</td></tr><tr><td>Median of the noise maximum</td><td class="num">2.3095</td></tr><tr><td>Observed clears the 5% line</td><td class="num">no</td></tr><tr><td>Deflated Sharpe probability</td><td class="num">0.0000</td></tr></table><p class="note">The record claims 32 cells against 64 ledger rows (two-sided pairing counts one cell per signal tested in both directions); the threshold below is the smaller, weaker deflation. Thresholds are simulated at report time from the recorded cell and cluster counts (100,000 draws, seed 0) &mdash; seeded, so they reproduce. Sharpe: recorded. Deflated Sharpe: recorded. The MEAN of the noise maximum is not a bar &mdash; pure noise beats its own expected maximum about 45% of the time. The 5% line is.</p><h2><span class="n">7</span>The bar, as graded</h2><table><tr><th>Condition</th><th>As registered</th><th style="text-align:right">Observed</th><th>Graded</th><th></th></tr><tr><td>gross_2x_cost</td><td>gross &gt;= 0.46</td><td class="num">0.2347</td><td class="note">computed from the recorded metrics</td><td><span class="tag t-fail">FAIL</span></td></tr><tr><td>null_flat</td><td>null_max_abs_t &lt; 3.0</td><td class="num">2.5627</td><td class="note">computed from the recorded metrics</td><td><span class="tag t-pass">PASS</span></td></tr><tr><td>t3</td><td>t &gt;= 3.0</td><td class="num">2.4159</td><td class="note">computed from the recorded metrics</td><td><span class="tag t-fail">FAIL</span></td></tr><tr><td>year_2022_positive</td><td>y2022 &gt; 0.0</td><td class="num">-0.6160</td><td class="note">computed from the recorded metrics</td><td><span class="tag t-fail">FAIL</span></td></tr></table><table><tr><td>Cells registered</td><td class="num">64</td></tr><tr><td>Cells spent</td><td class="num">64</td></tr><tr><td>Within budget</td><td class="num">yes</td></tr></table><p class="note">Graded against the file on disk. Unregistered conditions are ignored: adding one until something passes is the failure this library exists to prevent.</p><h2><span class="n">8</span>The rest of the record</h2><table><tr><td>assumed_gross</td><td class="num">0.014808</td></tr><tr><td>dsr</td><td class="num">0.000025</td></tr><tr><td>fill_haircut</td><td class="num">-2.391981</td></tr><tr><td>hold_gross</td><td class="num">0.096029</td></tr><tr><td>n_cells</td><td class="num">32</td></tr><tr><td>null_expected_gross</td><td class="num">0.097509</td></tr><tr><td>null_max_abs_t</td><td class="num">2.562709</td></tr><tr><td>null_ok</td><td class="num">yes</td></tr><tr><td>sr</td><td class="num">0.102092</td></tr><tr><td>through_gross</td><td class="num">-0.063713</td></tr><tr><td>touch_gross</td><td class="num">-0.035419</td></tr><tr><td>y2022</td><td class="num">-0.616050</td></tr></table><p class="note">Every remaining top-level entry of the test-look payload, so nothing recorded is hidden by this rendering.</p><footer><p><strong>What this report is.</strong> A rendering of a pre-registration, its trial ledger and its single held-out test look, as they exist on disk. It reports what was promised and what was measured. It is not investment advice, not an offer, and not a track record; nothing here forecasts any future result.</p><p><strong>What it does not prove.</strong> The record is tamper-<em>evident</em>, not tamper-<em>proof</em>: it binds the test look to the registration by hash, so an edit after the fact is visible &mdash; but anyone with write access can delete both and start over. For a third party to rely on it, the registration and the stamp must be anchored somewhere the researcher does not control (a commit, an append-only store, a timestamping authority).</p><p>Figures are in the units the research recorded; this library is unit-agnostic and does not convert them.</p></footer></div></body></html>

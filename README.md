@@ -147,6 +147,12 @@ somewhere you don't control.
 - **[examples/02_catch_a_leak.py](examples/02_catch_a_leak.py)** — four
   features, two leaks, one 50ms check; includes the leak that inspired the
   library.
+- **[A finished report](docs/sample-report.html)** —
+  [rendered](https://htmlpreview.github.io/?https://raw.githubusercontent.com/brunopereira81/nullbar/master/docs/sample-report.html).
+  Our own best strategy, seven years of real hourly bars, 32 two-sided cells
+  of search, graded against a bar frozen before the test window was touched:
+  **FAIL** on three of four conditions. That is what the artifact looks like
+  when the answer is no.
 - **[The leak that survived two years](docs/posts/the-leak-that-survived-two-years.md)**
   — the full story.
 - **[CHANGELOG](CHANGELOG.md)** — what moved, and why.
