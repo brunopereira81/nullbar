@@ -170,6 +170,17 @@ def expected_max_abs_t(n_cells: int, df: int | None = None,
     FLATTERING direction, in the one function whose job is to be
     unflattering. ``df=None`` is the large-sample limit, and a lower bound.
 
+    THE MEAN IS NOT A BAR. Pure noise beats its own expected maximum about
+    45% of the time (measured: 45.4% over best-of-64). A threshold noise
+    clears 5% of the time is a QUANTILE, and it is much higher — 3.35
+    against 2.60 at 64 cells. Report ``summary=0.95`` when you want a bar to
+    pre-register, and the mean when you want to describe where the middle of
+    the noise distribution sits.
+
+    Count cells the way |t| does: a signal tested long AND short is one
+    TWO-SIDED cell, not two, because |t| already spans both tails. 16
+    signals x 2 horizons x 2 directions is 32 cells here, not 64.
+
     ``summary`` is "mean" (default), "median", or a quantile in (0, 1).
     Below df=5 the MEAN is refused: the t distribution's tails dominate it
     and the answer stops being a threshold anything could pass (16 cells:

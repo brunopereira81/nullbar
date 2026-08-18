@@ -168,18 +168,27 @@ raises rather than being guessed at.
 
 ### The deflation cheat sheet
 
-| You searched | Null expects max &#124;t&#124; ≈ | On 21 clusters | So a bar of 3.0 has |
+| You searched | Null E&#124;max t&#124; | Noise clears 5% of the time | So a bar of 3.0 |
 |---|---|---|---|
-| 1 cell | 0.80 | 0.83 | lots of headroom |
-| 4 cells | 1.47 | 1.55 | real headroom |
-| 16 cells | 2.08 | 2.25 | some headroom |
-| 64 cells | 2.60 | 2.90 | almost none |
+| 1 cell | 0.80 | 1.96 | lots of headroom |
+| 4 cells | 1.47 | 2.49 | real headroom |
+| 16 cells | 2.08 | 2.95 | some headroom |
+| 64 cells | 2.60 | 3.35 | none — noise clears 3.0 more than 5% of the time |
 
-Column 2 is `nullbar.expected_max_abs_t(k)` — simulated, seeded, and the
-large-sample (normal) limit. Below `df=5` (six clusters) the MEAN of max|t|
-is refused: the t tails own it and the answer stops being a threshold
-anything could pass. Ask for `summary="median"` and say so, or get more
-clusters. Column 3 is `expected_max_abs_t(k, df=20)`:
+Column 2 is `nullbar.expected_max_abs_t(k)`; column 3 is the same call with
+`summary=0.95`. **Use column 3 to set a bar.** The mean is where the middle
+of the noise distribution sits, and noise beats it about 45% of the time
+(measured: 45.4% over best-of-64) — a "threshold" a coin flip clears is not
+one. Both are simulated, seeded, and the large-sample (normal) limit; pass
+`df=n_clusters - 1` for the honest, fatter-tailed version.
+
+Count cells the way |t| does: a signal tested long AND short is one
+two-sided cell, not two. 16 signals × 2 horizons × 2 directions is **32**,
+not 64.
+
+Below `df=5` (six clusters) the MEAN is refused outright: the t tails own it
+and the answer stops being a threshold anything could pass. Ask for
+`summary="median"` and say so, or get more clusters. Column 3 is `expected_max_abs_t(k, df=20)`:
 a cluster-level t computed on 21 clusters has fatter tails, so the luck
 threshold is **higher**. Pass `df=n_clusters - 1`; the normal column is a
 lower bound and errs in the flattering direction. Both assume INDEPENDENT

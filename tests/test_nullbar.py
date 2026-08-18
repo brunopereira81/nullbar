@@ -166,13 +166,27 @@ class TestExpectedMaxAbsT:
         # the cheat sheet in docs/workflow.md said 1.6 / 2.2 / 2.7 while the
         # function it names returns 1.47 / 2.08 / 2.60. One shipped artifact
         # has to be wrong; this test decides which.
-        rows = re.findall(r"\|\s*(\d+) cells?\s*\|\s*([0-9.]+)\s*\|",
-                          (ROOT / "docs" / "workflow.md").read_text())
+        rows = re.findall(
+            r"\|\s*(\d+) cells?\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|",
+            (ROOT / "docs" / "workflow.md").read_text())
         assert len(rows) >= 4, "cheat-sheet table not found"
-        for cells, quoted in rows:
-            assert float(quoted) == pytest.approx(
-                expected_max_abs_t(int(cells)), abs=0.02), \
-                f"docs say {quoted} for {cells} cells"
+        for cells, mean_q, tail_q in rows:
+            k = int(cells)
+            assert float(mean_q) == pytest.approx(
+                expected_max_abs_t(k), abs=0.02), \
+                f"docs say E[max] {mean_q} for {cells} cells"
+            assert float(tail_q) == pytest.approx(
+                expected_max_abs_t(k, summary=0.95), abs=0.02), \
+                f"docs say 5% tail {tail_q} for {cells} cells"
+
+    def test_the_mean_is_a_coin_flip_not_a_bar(self):
+        # pure noise beats its own expected maximum ~45% of the time, which
+        # is why the cheat sheet's bar column is the 95th percentile
+        rng = np.random.default_rng(0)
+        best = np.abs(rng.standard_normal((50_000, 64))).max(axis=1)
+        assert 0.40 < (best > expected_max_abs_t(64)).mean() < 0.50
+        assert (best > expected_max_abs_t(64, summary=0.95)).mean() \
+            == pytest.approx(0.05, abs=0.01)
 
 
 # ── ledger ───────────────────────────────────────────────────────────────────
