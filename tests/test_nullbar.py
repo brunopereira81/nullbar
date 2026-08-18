@@ -179,6 +179,42 @@ class TestExpectedMaxAbsT:
                 expected_max_abs_t(k, summary=0.95), abs=0.02), \
                 f"docs say 5% tail {tail_q} for {cells} cells"
 
+    def test_cheat_sheet_cites_only_calls_it_prints(self):
+        # The numeric check above compares the TABLE to the function, so a
+        # stale sentence describing a column that is no longer there passes
+        # it — which happened: the v0.3.0 text "column 3 is
+        # expected_max_abs_t(k, df=20)" survived under a table whose third
+        # column had become the 95th percentile. Every call the section
+        # names must therefore produce a number the section prints.
+        doc = (ROOT / "docs" / "workflow.md").read_text()
+        section = doc[doc.index("### The deflation cheat sheet"):]
+        rows = re.findall(
+            r"\|\s*(\d+) cells?\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|",
+            section)
+        cells = [int(c) for c, _, _ in rows]
+        printed = {float(x) for _, a, b in rows for x in (a, b)}
+
+        def parse(arg: str):
+            arg = arg.strip()
+            if arg.startswith(("'", '"')):
+                return arg.strip("'\"")
+            return float(arg) if "." in arg else int(arg)
+
+        for call in re.findall(r"expected_max_abs_t\(([^)]*)\)", section):
+            parts = [a for a in call.split(",") if a.strip()]
+            if not parts:
+                continue
+            first, kwargs = parts[0].strip(), {}
+            for extra in parts[1:]:
+                name, _, value = extra.partition("=")
+                kwargs[name.strip()] = parse(value)
+            counts = cells if first in ("k", "n_cells") else [int(first)]
+            for n in counts:
+                got = expected_max_abs_t(n, **kwargs)
+                assert any(abs(got - q) <= 0.02 for q in printed), (
+                    f"the cheat sheet cites expected_max_abs_t({call}) "
+                    f"-> {got:.2f} at {n} cells, a number it never prints")
+
     def test_the_mean_is_a_coin_flip_not_a_bar(self):
         # pure noise beats its own expected maximum ~45% of the time, which
         # is why the cheat sheet's bar column is the 95th percentile

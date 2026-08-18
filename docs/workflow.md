@@ -179,8 +179,9 @@ Column 2 is `nullbar.expected_max_abs_t(k)`; column 3 is the same call with
 `summary=0.95`. **Use column 3 to set a bar.** The mean is where the middle
 of the noise distribution sits, and noise beats it about 45% of the time
 (measured: 45.4% over best-of-64) — a "threshold" a coin flip clears is not
-one. Both are simulated, seeded, and the large-sample (normal) limit; pass
-`df=n_clusters - 1` for the honest, fatter-tailed version.
+one. Both are simulated, seeded, and the large-sample (normal) limit — a lower
+bound that errs in the flattering direction; pass `df=n_clusters - 1` for
+the honest, fatter-tailed version.
 
 Count cells the way |t| does: a signal tested long AND short is one
 two-sided cell, not two. 16 signals × 2 horizons × 2 directions is **32**,
@@ -188,12 +189,11 @@ not 64.
 
 Below `df=5` (six clusters) the MEAN is refused outright: the t tails own it
 and the answer stops being a threshold anything could pass. Ask for
-`summary="median"` and say so, or get more clusters. Column 3 is `expected_max_abs_t(k, df=20)`:
-a cluster-level t computed on 21 clusters has fatter tails, so the luck
-threshold is **higher**. Pass `df=n_clusters - 1`; the normal column is a
-lower bound and errs in the flattering direction. Both assume INDEPENDENT
-cells — 16 correlated signals × 2 horizons × 2 directions is nowhere near 64
-independent, so the threshold is conservative (the safe direction).
+`summary="median"` and say so, or get more clusters.
+
+Every figure here assumes INDEPENDENT cells — 16 correlated signals × 2
+horizons × 2 directions is nowhere near 64 independent, so the threshold is
+conservative (the safe direction).
 
 And for Sharpe-based work: `nullbar.dsr(...)` needs the trial count and the
 spread of Sharpes across them; passing `None` for either returns `None`,

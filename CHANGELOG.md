@@ -50,6 +50,15 @@ its own function, was ever acted on.
   directions is 32 cells, not 64. Documented, and applied in the walkthrough
   and the launch post.
 
+- **The cheat sheet described its third column twice, and the two
+  descriptions disagreed.** The v0.3.0 sentence "column 3 is
+  `expected_max_abs_t(k, df=20)`" survived under a table whose third column
+  had become the 95th percentile — 3.35 at 64 cells is p95; `df=20` gives
+  2.90. The numeric docs-vs-function test passed straight through it,
+  because it compared the TABLE to the function and never read the prose.
+  There is now a second test: every `expected_max_abs_t(...)` call the
+  section names must produce a number the section prints.
+
 ### Internal
 
 - `verdict()` read the frozen registration twice (once to grade, once for
