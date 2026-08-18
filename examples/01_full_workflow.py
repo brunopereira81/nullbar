@@ -107,9 +107,14 @@ print(f"deflated Sharpe probability (n_trials={ledger.count()}): {d:.3f}   "
 # ── 7. ONE test look, then the verdict against the frozen bar ───────────────
 test = nullbar.block_cluster_eval(signal[~research], fwd_real[~research],
                                   block="24h")
-measured = {"null_max_abs_t": nv["max_abs_t_vs_expected"],
-            "t": test["t"], "net": test["gross"] - 0.10}
-reg.spend_test_look(reg_path, results=test)
+# evidence() assembles the payload the record has to carry: the result, the
+# machinery check, the fill pricing, and any metric the bar grades. Spending
+# the look on the bare result instead (which this demo used to do) leaves the
+# stamp unable to re-derive two of its own three conditions.
+measured = nullbar.evidence(test, null=nv, fills=bracket,
+                            net=test["gross"] - 0.10, sr=observed_sr,
+                            dsr=d)
+reg.spend_test_look(reg_path, results=measured)
 # the bar grades itself from those metrics, and n_trials holds the search to
 # the budget it registered.
 verdict = reg.verdict(results=measured, n_trials=ledger.count())
@@ -123,3 +128,12 @@ try:
     reg.spend_test_look(reg_path, results={"t": 99})
 except nullbar.AlreadySpentError as e:
     print(f"second test look refused: {e}")
+
+# ── 8. the artifact: registration + ledger + stamp on one page ──────────────
+# everything above, rendered from the files on disk — nothing recomputed from
+# the data, and every gap in the record named rather than left blank.
+report = nullbar.render_html(nullbar.report_data(reg_path,
+                                                 workdir / "trials.jsonl"))
+(workdir / "demo-signal.html").write_text(report)
+print(f"report: {workdir / 'demo-signal.html'} "
+      f"({len(report) / 1024:.0f} KB, self-contained; print it to PDF)")

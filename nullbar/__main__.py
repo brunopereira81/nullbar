@@ -1,11 +1,11 @@
-"""``python3 -m nullbar <paths...>`` — the lookahead lint.
+"""``python3 -m nullbar <verb|paths...>`` — the command line.
 
-A module entry point rather than ``-m nullbar.leaklint``, which warns
-because importing the package has already loaded that submodule.
+A module entry point rather than ``-m nullbar.cli``, which warns because
+importing the package has already loaded that submodule.
 """
 import sys
 
-from .leaklint import main
+from .cli import main
 
 if __name__ == "__main__":
     sys.exit(main())
