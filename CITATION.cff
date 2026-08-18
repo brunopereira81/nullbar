@@ -7,7 +7,7 @@ authors:
     given-names: Bruno
 repository-code: "https://github.com/brunopereira81/nullbar"
 license: MIT
-version: 0.2.0
+version: 0.3.0
 date-released: "2026-08-18"
 keywords:
   - backtesting

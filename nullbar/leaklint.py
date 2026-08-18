@@ -46,6 +46,13 @@ _PATTERNS: list[tuple[str, str, str]] = [
      "previous COMPLETED bucket, not the one being formed", "review"),
     (r"fillna\(\s*method\s*=\s*['\"]bfill|\.bfill\(", "backfill copies "
      "future values into the past", "high"),
+    (r"\.shift\(\s*periods\s*=\s*-", "negative shift (keyword form) pulls "
+     "FUTURE rows into the present", "high"),
+    (r"np\.roll\([^)]*,\s*-", "np.roll with a negative shift wraps future "
+     "values into the present", "high"),
+    (r"merge_asof\([^)]*direction\s*=\s*['\"]forward",
+     "merge_asof(direction='forward') matches the NEXT record, which is the "
+     "future at the time of the row it lands on", "high"),
 ]
 
 _SUPPRESS = re.compile(r"#\s*(noqa:\s*leak|nullbar:\s*allow)", re.I)
@@ -173,6 +180,23 @@ def prefix_replay_check(
     Returns ``{"leak", "checked", "rows_compared", "cuts"}``. Read
     ``checked`` too: a run that compared nothing is not a clean bill of
     health — ``assert_no_leak`` enforces both.
+
+    WHAT THIS CANNOT SEE. The check is sound in one direction only: a
+    feature whose past changes IS leaking. The converse does not follow,
+    and two common leaks are prefix-stable by construction, so they pass:
+
+    1. A transform fitted on the whole sample outside the callable —
+       ``MU, SD = df.mean(), df.std()`` then ``lambda d: (d - MU) / SD``.
+       This is ``StandardScaler().fit(X)`` before the split, the most
+       common leak in ML pipelines, and it is invisible here because the
+       leak is baked into a constant.
+    2. A callable that reads a global frame instead of its argument —
+       ``lambda d: FULL["close"].shift(-1).reindex(d.index)``.
+
+    Both have the same cure: pass a FIT-AND-TRANSFORM callable that derives
+    everything it uses from the frame it is handed, and nothing from the
+    enclosing scope. A leak the function cannot see is a leak this check
+    cannot report, and no amount of cuts changes that.
     """
     full = _as_frame(feature_fn(data))
     results, leaked, compared_total = [], False, 0

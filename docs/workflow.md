@@ -37,6 +37,14 @@ python3 -m nullbar strategy/ features/          # exit 1 on any hit
 
 A line you have examined and can defend carries `# noqa: leak <why>`.
 
+**Know what the replay cannot see.** It proves one direction: a feature
+whose past changes when the future is appended is leaking. It cannot see a
+leak baked into a constant (`MU, SD = df.mean(), df.std()` fitted outside
+the callable — i.e. `StandardScaler().fit(X)` before the split) or a
+callable that reads a global frame instead of its argument. Both are
+prefix-stable and both pass. Cure: hand it a **fit-and-transform** callable
+that derives everything from the frame it is given.
+
 ## 1. Register before you run
 
 ```python
@@ -63,6 +71,10 @@ both and start over. Commit them if a third party has to believe them.
 ledger = nullbar.TrialLedger("experiments/trials.jsonl")
 ledger.record("my_exp", {"threshold": 0.10}, metrics={"sr": cell_sharpe})
 ```
+
+Register a `cells_budget` and pass `verdict(..., n_trials=ledger.count())`:
+a search that spent more cells than it promised fails, because the
+deflation the bar was set against no longer applies.
 
 Every variant you evaluate — including the ones you abandon after one look —
 goes in. The ledger is append-only with no delete API, because the count it
@@ -126,8 +138,16 @@ turned a true gross of 1.0 into 9.0 in testing, silently.
 
 ```python
 reg.spend_test_look("experiments/my_exp.json", results=test_results)
-verdict = reg.verdict({"cond_name": test_t >= 3.0, ...})
+verdict = reg.verdict(results=test_results, n_trials=ledger.count())
 ```
+
+Write the bar as a **spec** — `{"metric": "t", "op": ">=", "value": 3.0}` —
+and `verdict(results=...)` grades it from your metrics directly, so the
+frozen promise and the code grading it cannot drift apart. With prose bars
+they can, permanently and undetectably: this library's own demo once froze
+"null-control |t| ~ 0" and graded it with `worst < 3`, then passed on a
+null of 2.77. Pass both a spec and your own boolean and a disagreement
+raises `BarMismatchError` instead of quietly picking one.
 
 The held-out evaluation happens once. A second `spend_test_look` raises
 `AlreadySpentError` with the timestamp of the first. The verdict checks the

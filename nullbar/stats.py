@@ -62,7 +62,20 @@ def clustered_t(values, clusters) -> tuple[float, float, int]:
     if len(v) != len(c):
         raise ValueError(f"length mismatch: {len(v)} values, {len(c)} "
                          "cluster labels")
-    cl = pd.Series(v).groupby(c).mean()
+    labels = pd.Series(c)
+    if labels.isna().any():
+        raise ValueError(
+            f"{int(labels.isna().sum())} observations carry a null cluster "
+            "label; pandas would drop them silently. Assign or filter them "
+            "yourself so the drop is visible.")
+    grouped = pd.Series(v).groupby(c)
+    cl = grouped.mean()
+    # A cluster whose observations are ALL non-finite contributes nothing to
+    # the mean or the spread, but counting it in n divides the standard error
+    # by a sqrt(n) that is too large: t comes out inflated by
+    # sqrt(n_total / n_finite). Trailing rows with no forward return yet are
+    # the ordinary way this happens.
+    cl = cl[grouped.count() > 0]
     n = len(cl)
     if n < 3:
         return float("nan"), float(cl.mean()) if n else float("nan"), n

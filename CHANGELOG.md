@@ -2,6 +2,68 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.3.0] — 2026-08-18
+
+The remaining findings from the first audit (F1–F20, 2026-08-17); v0.2.0
+covered the second review's list, which restated only part of it. Two of
+these are silent-wrong-answer defects and one is the design gap that had
+already bitten this project's own launch material.
+
+### Fixed — correctness
+
+- **`clustered_t` inflated t by `sqrt(n_total / n_finite)`.** Cluster means
+  come from `groupby().mean()`, which skips NaN, but `n` counted every
+  cluster label including those that contributed no finite observation, so
+  the standard error was divided by a `sqrt(n)` that was too large — the
+  exact inflation the function exists to remove, arriving through the input.
+  Trailing rows with no forward return yet are the ordinary way it happens
+  (30 real + 30 empty clusters read t = 1.680 instead of 1.188). Empty
+  clusters are now dropped, and a null cluster LABEL raises rather than
+  being silently dropped by pandas.
+- **A non-datetime index bucketed every row into 1970.** `pd.to_datetime`
+  reads an integer index as nanoseconds since the epoch, so
+  `block_cluster_eval` on a `RangeIndex` returned one cluster, no error, and
+  a number that looked like a result. It now raises `TypeError`.
+- **The bar as written and the bar as evaluated could diverge.** The
+  registration stored prose and `verdict()` accepted caller-computed
+  booleans, with nothing connecting them — and it had already happened in
+  this project's flagship demo, which froze "null-control |t| ~ 0" and
+  graded it with `worst < 3`, passing on a null of 2.77. A bar entry may now
+  be a spec — `{"metric": "t", "op": ">=", "value": 3.0}`, optionally
+  `"abs": True` — which `verdict(results=...)` grades directly from your
+  metrics. Passing both a spec and your own boolean raises
+  `BarMismatchError` on disagreement instead of silently picking one. An
+  absent metric is `missing`, never False; a NaN metric fails.
+- **`cells_budget` is wired up.** It was hashed into the seal and read by
+  nothing. `verdict(..., n_trials=ledger.count())` now fails a search that
+  spent more cells than it registered, because the deflation the bar was set
+  against no longer applies.
+- **Re-running an identical registration no longer accuses you of editing
+  history.** `created_at` is part of the hash, so a re-run after a crash, or
+  twice in CI, raised `FileExistsError` on a byte-identical promise.
+  Comparison now ignores the timestamp; a moved design or bar is still
+  refused, and the file's hash stays the one that counts.
+
+### Fixed — leak detection
+
+- Three lookahead shapes the static lint missed: `shift(periods=-1)`,
+  `np.roll(arr, -1)` and `merge_asof(direction="forward")`.
+- **The prefix-replay check's false-negative class is now stated in the
+  docstring, in `docs/workflow.md` and in the README**, with a regression
+  test pinning it: a transform fitted on the whole sample OUTSIDE the
+  callable (i.e. `StandardScaler().fit(X)` before the split) and a callable
+  that reads a global frame instead of its argument are both prefix-stable
+  and both pass. The cure is to hand it a fit-and-transform callable. A leak
+  the function cannot see is a leak this check cannot report, and no number
+  of cuts changes that.
+
+### Other
+
+- Direct tests for `shuffle_within_columns`, `through_mask` and `LintHit`,
+  which were exported but only ever exercised through their callers.
+- `dist/` appeared twice in `.gitignore`.
+- Tags: v0.1.0 and v0.2.0 are tagged retroactively, v0.3.0 at this commit.
+
 ## [0.2.0] — 2026-08-18
 
 **Renamed from `prereg` to `nullbar`.** The PyPI name `prereg` was claimed on

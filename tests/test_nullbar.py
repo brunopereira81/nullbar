@@ -12,12 +12,14 @@ import pandas as pd
 import pytest
 
 import nullbar
-from nullbar import (AlreadySpentError, AmbiguousConditionError, LeakError,
+from nullbar import (AlreadySpentError, AmbiguousConditionError,
+                     BarMismatchError, LeakError,
                      Registration, SealBrokenError, TrialLedger,
                      assert_no_leak, block_cluster_eval, clustered_t, dsr,
                      expected_max_abs_t, expected_max_sharpe, fill_bracket,
                      hold_baseline, lint_source, null_control, null_verdict,
-                     prefix_replay_check, psr, sharpe, touch_mask)
+                     prefix_replay_check, psr, sharpe, shuffle_within_columns,
+                     through_mask, touch_mask)
 
 ROOT = Path(__file__).parent.parent
 
@@ -47,6 +49,27 @@ class TestClusteredT:
         c = pd.Series(["a", "b", "c"], index=[7, 8, 9])
         with pytest.raises(ValueError):
             clustered_t(v, c)
+
+    def test_all_nan_clusters_do_not_inflate_t(self):
+        # n counted every cluster label while the mean and the spread
+        # skipped the empty ones, so t came out x sqrt(n_total/n_finite) —
+        # the exact inflation this function exists to remove, arriving
+        # through the input. Trailing rows with no forward return yet are
+        # the ordinary way it happens.
+        rng = np.random.default_rng(0)
+        vals = rng.normal(0.3, 1.0, 30)
+        real = clustered_t(pd.Series(vals), pd.Series(np.arange(30)))
+        padded = clustered_t(
+            pd.Series(np.concatenate([vals, np.full(30, np.nan)])),
+            pd.Series(np.arange(60)))
+        assert padded[2] == real[2] == 30
+        assert padded[0] == pytest.approx(real[0], rel=1e-12)
+
+    def test_null_cluster_labels_raise(self):
+        # pandas would drop these observations silently
+        with pytest.raises(ValueError):
+            clustered_t(pd.Series([1.0, 2.0, 3.0]),
+                        pd.Series(["a", None, "b"]))
 
     def test_length_mismatch_raises(self):
         with pytest.raises(ValueError):
@@ -316,6 +339,100 @@ class TestTheSeal:
             r.spend_test_look(p, {"t": 2.42})
 
 
+class TestBarSpecsAndBudget:
+    """F9: the bar as written and the bar as evaluated could diverge — and
+    did, in the flagship demo. F16: cells_budget was hashed into the seal
+    and read by nothing."""
+
+    def _reg(self, **kw):
+        return Registration(
+            name="x", hypothesis="h", design={},
+            bar={"t3": {"metric": "t", "op": ">=", "value": 3.0},
+                 "null_flat": {"metric": "null_t", "op": "<", "value": 3.0,
+                               "abs": True},
+                 "judgement": "a call only a human can make"}, **kw)
+
+    def test_spec_grades_itself_from_results(self):
+        v = self._reg().verdict(results={"t": 2.42, "null_t": -0.6},
+                                conditions={"judgement": True})
+        assert v["pass"] is False and v["failed"] == ["t3"]
+        assert sorted(v["graded"]) == ["null_flat", "t3"]
+
+    def test_abs_is_honoured(self):
+        # |−4.0| < 3.0 is false; without abs it would pass
+        v = self._reg().verdict(results={"t": 4.0, "null_t": -4.0},
+                                conditions={"judgement": True})
+        assert v["failed"] == ["null_flat"]
+
+    def test_caller_disagreeing_with_the_frozen_bar_raises(self):
+        with pytest.raises(BarMismatchError, match="t3"):
+            self._reg().verdict(results={"t": 2.42, "null_t": 0.1},
+                                conditions={"t3": True, "judgement": True})
+
+    def test_caller_agreeing_is_fine(self):
+        v = self._reg().verdict(results={"t": 4.0, "null_t": 0.1},
+                                conditions={"t3": True, "judgement": True})
+        assert v["pass"] is True
+
+    def test_absent_metric_is_missing_not_false(self):
+        v = self._reg().verdict(results={"null_t": 0.1},
+                                conditions={"judgement": True})
+        assert v["missing"] == ["t3"] and "t3" not in v["failed"]
+
+    def test_nan_metric_fails(self):
+        v = self._reg().verdict(results={"t": float("nan"), "null_t": 0.1},
+                                conditions={"judgement": True})
+        assert v["failed"] == ["t3"]
+
+    def test_malformed_specs_are_refused_at_registration(self):
+        with pytest.raises(ValueError):
+            Registration("x", "h", {}, bar={"a": {"metric": "t", "op": ">="}})
+        with pytest.raises(ValueError):
+            Registration("x", "h", {},
+                         bar={"a": {"metric": "t", "op": "=~", "value": 1}})
+        with pytest.raises(TypeError):
+            Registration("x", "h", {}, bar={"a": 3.0})
+
+    def test_budget_is_enforced_when_the_trial_count_is_given(self):
+        reg = self._reg(cells_budget=4)
+        ok = reg.verdict(results={"t": 4.0, "null_t": 0.1},
+                         conditions={"judgement": True}, n_trials=4)
+        over = reg.verdict(results={"t": 4.0, "null_t": 0.1},
+                           conditions={"judgement": True}, n_trials=9)
+        assert ok["pass"] is True and ok["budget"]["ok"] is True
+        assert over["pass"] is False and over["budget"] == {
+            "registered": 4, "spent": 9, "ok": False}
+
+    def test_budget_is_not_checked_unless_asked(self):
+        v = self._reg(cells_budget=1).verdict(
+            results={"t": 4.0, "null_t": 0.1}, conditions={"judgement": True})
+        assert v["pass"] is True and v["budget"] is None
+
+
+class TestRefreezing:
+    """F11: created_at is in the hash, so re-running the same registration
+    script after a crash accused the user of editing history."""
+
+    def _make(self):
+        return Registration(name="x", hypothesis="h", design={"hold": 24},
+                            bar={"t3": "clustered t >= 3.0"})
+
+    def test_identical_registration_re_runs_cleanly(self, tmp_path):
+        p = tmp_path / "reg.json"
+        first = self._make().freeze(p)
+        again = self._make()                 # new created_at, same promise
+        assert again.freeze(p) == first      # no FileExistsError
+        assert again.verdict({"t3": True})["verified"] is True
+
+    def test_a_moved_bar_is_still_refused(self, tmp_path):
+        p = tmp_path / "reg.json"
+        self._make().freeze(p)
+        lowered = Registration(name="x", hypothesis="h", design={"hold": 24},
+                               bar={"t3": "clustered t >= 2.0"})
+        with pytest.raises(FileExistsError):
+            lowered.freeze(p)
+
+
 # ── evaluate ─────────────────────────────────────────────────────────────────
 def _toy(seed=0, n=2000, k=6, drift=0.0):
     rng = np.random.default_rng(seed)
@@ -363,6 +480,17 @@ class TestEvaluate:
         mask, fwd = _toy()
         with pytest.raises(ValueError):
             block_cluster_eval(mask.iloc[:, :3], fwd)
+
+    def test_non_datetime_index_raises(self):
+        # pd.to_datetime reads an integer index as nanoseconds since the
+        # epoch: every row floored into one 1970 block, one cluster, no
+        # error, a number that looks like a result.
+        rng = np.random.default_rng(0)
+        idx = pd.RangeIndex(400)
+        fwd = pd.DataFrame({"A": rng.normal(0, 1, 400)}, index=idx)
+        mask = pd.DataFrame({"A": rng.random(400) < 0.3}, index=idx)
+        with pytest.raises(TypeError):
+            block_cluster_eval(mask, fwd)
 
     def test_no_trades_still_answers_every_question(self):
         # a strategy that took nothing is exactly when a caller KeyErrors
@@ -509,6 +637,41 @@ class TestLeakLint:
         assert main([str(dirty), "--exit-zero"]) == 0
         assert "shift" in capsys.readouterr().out
 
+    def test_shapes_the_heuristics_used_to_miss(self, tmp_path):
+        src = tmp_path / "feat.py"
+        src.write_text(
+            'a = df["col#1"].shift(-1)\n'                    # 1: '#' in string
+            "c = df.shift(periods=-1)\n"                     # 2: keyword form
+            "e = np.roll(arr, -1)\n"                         # 3
+            'f = df.merge_asof(other, direction="forward")\n'  # 4
+            "b = df.shift(-1)\n"                             # 5: always caught
+            "g = y.iloc[i+1]\n"                              # 6: always caught
+            "ok = df.shift(1)\n")                            # 7: honest
+        assert sorted(h.line for h in lint_source([src])) == [1, 2, 3, 4, 5, 6]
+
+    def test_lint_hit_carries_what_a_reviewer_needs(self, tmp_path):
+        src = tmp_path / "feat.py"
+        src.write_text("x = df.shift(-1)\n")
+        hit, = lint_source([src])
+        assert hit.line == 1 and hit.severity == "high"
+        assert hit.text == "x = df.shift(-1)" and str(src) == hit.path
+        assert "FUTURE" in hit.message
+
+    def test_known_false_negatives_stay_documented(self):
+        # The check is sound one way only. These two leaks are prefix-stable
+        # by construction and DO pass — pinned here so the limitation cannot
+        # quietly become a claim.
+        idx = pd.date_range("2024-01-01", periods=300, freq="h")
+        df = pd.DataFrame({"c": np.random.default_rng(6).normal(0, 1, 300)},
+                          index=idx)
+        MU, SD = df["c"].mean(), df["c"].std()       # fitted on everything
+        prefit = lambda d: (d["c"] - MU) / SD
+        closure = lambda d: df["c"].shift(-1).reindex(d.index)  # tomorrow
+        assert prefix_replay_check(prefit, df)["leak"] is False
+        assert prefix_replay_check(closure, df)["leak"] is False
+        doc = prefix_replay_check.__doc__
+        assert "CANNOT SEE" in doc and "fit-and-transform" in doc.lower()
+
     def test_prefix_replay_catches_full_sample_normalization(self):
         idx = pd.date_range("2024-01-01", periods=400, freq="h")
         df = pd.DataFrame({"c": np.random.default_rng(0).normal(0, 1, 400)},
@@ -577,6 +740,35 @@ class TestLeakLint:
         with pytest.raises(LeakError, match="zscore"):
             assert_no_leak(prefix_replay_check(
                 lambda d: (d - d.mean()) / d.std(), df), "zscore")
+
+
+# ── exported surface that only ever ran through its callers ─────────────────
+class TestExportedHelpers:
+    def test_shuffle_preserves_each_columns_values(self):
+        idx = pd.date_range("2024-01-01", periods=200, freq="h", tz="UTC")
+        rng = np.random.default_rng(0)
+        fwd = pd.DataFrame({"A": rng.normal(0, 1, 200),
+                            "B": rng.normal(5, 1, 200)}, index=idx)
+        out = shuffle_within_columns(fwd, seed=3)
+        for col in fwd.columns:                      # a permutation, per column
+            assert sorted(out[col]) == pytest.approx(sorted(fwd[col]))
+        assert not out["A"].equals(fwd["A"])         # and actually shuffled
+        assert out.index.equals(fwd.index)
+
+    def test_shuffle_keeps_nan_positions(self):
+        idx = pd.date_range("2024-01-01", periods=10, freq="h", tz="UTC")
+        fwd = pd.DataFrame({"A": [1.0, np.nan, 3.0, np.nan, 5.0,
+                                  6.0, 7.0, 8.0, 9.0, 10.0]}, index=idx)
+        out = shuffle_within_columns(fwd, seed=1)
+        assert out["A"].isna().tolist() == fwd["A"].isna().tolist()
+
+    def test_through_requires_trading_past_the_bid(self):
+        idx = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        limit = pd.DataFrame({"A": [100.0] * 3}, index=idx)
+        # next bar's low touches exactly 100.0, never goes through it
+        low = pd.DataFrame({"A": [100.0, 100.0, 100.0]}, index=idx)
+        assert bool(touch_mask(limit, low).iloc[0, 0]) is True
+        assert bool(through_mask(limit, low, margin=5e-4).iloc[0, 0]) is False
 
 
 # ── packaging ────────────────────────────────────────────────────────────────

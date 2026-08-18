@@ -40,11 +40,15 @@ reg = nullbar.Registration(
     name="demo-signal",
     hypothesis="the demo signal predicts next-period returns",
     design={"entry_rate": 0.08, "hold": "1 bar", "cost_pct": 0.10},
+    # machine-checkable conditions: verdict(results=...) grades these from
+    # your metrics, so the frozen promise and the code that grades it cannot
+    # drift apart.
     bar={
-        "null_flat": "null control indistinguishable from holding",
-        "t3": "clustered t >= 3.0 on the TEST window",
-        "net_positive": "gross - cost > 0 on the TEST window",
+        "null_flat": {"metric": "null_max_abs_t", "op": "<", "value": 3.0},
+        "t3": {"metric": "t", "op": ">=", "value": 3.0},
+        "net_positive": {"metric": "net", "op": ">", "value": 0.0},
     },
+    cells_budget=4,                      # and we promise to search only 4
 )
 reg_path = workdir / "demo-signal.json"
 print(f"registered: sha256 {reg.freeze(reg_path)[:16]}…  -> {reg_path}")
@@ -103,14 +107,12 @@ print(f"deflated Sharpe probability (n_trials={ledger.count()}): {d:.3f}   "
 # ── 7. ONE test look, then the verdict against the frozen bar ───────────────
 test = nullbar.block_cluster_eval(signal[~research], fwd_real[~research],
                                   block="24h")
+measured = {"null_max_abs_t": nv["max_abs_t_vs_expected"],
+            "t": test["t"], "net": test["gross"] - 0.10}
 reg.spend_test_look(reg_path, results=test)
-# note: no bool() wrappers — numpy comparisons are graded correctly, and
-# anything that is not unambiguously true fails.
-verdict = reg.verdict({
-    "null_flat": nv["ok"],
-    "t3": test["t"] >= 3.0,
-    "net_positive": test["gross"] - 0.10 > 0,
-})
+# the bar grades itself from those metrics, and n_trials holds the search to
+# the budget it registered.
+verdict = reg.verdict(results=measured, n_trials=ledger.count())
 print(f"TEST: gross {test['gross']:+.3f}%, t {test['t']:+.2f}")
 print(f"VERDICT: {'PASS' if verdict['pass'] else 'FAIL'} "
       f"(failed: {verdict['failed'] or 'none'}, "

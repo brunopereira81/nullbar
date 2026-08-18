@@ -26,6 +26,14 @@ def _entries(mask: pd.DataFrame, fwd: pd.DataFrame,
              block: str) -> pd.DataFrame:
     """One entry per asset per block: (asset, block, fwd)."""
     require_same_axes(mask=mask, fwd=fwd)
+    if not isinstance(mask.index, pd.DatetimeIndex):
+        # pd.to_datetime would read an integer index as nanoseconds since the
+        # epoch and floor every row into a single 1970 block — one cluster,
+        # no error, a number that looks like a result.
+        raise TypeError(
+            f"index must be a DatetimeIndex to block by {block!r}; got "
+            f"{type(mask.index).__name__}. Convert it first "
+            "(df.index = pd.to_datetime(df.index)).")
     sel = mask.fillna(False).astype(bool).to_numpy() & np.isfinite(
         fwd.to_numpy())
     ts, ss = np.nonzero(sel)
@@ -36,7 +44,7 @@ def _entries(mask: pd.DataFrame, fwd: pd.DataFrame,
         "asset": np.asarray(mask.columns)[ss],
         "fwd": fwd.to_numpy()[ts, ss],
     })
-    df["block"] = pd.to_datetime(df["time"]).dt.floor(block)
+    df["block"] = pd.DatetimeIndex(df["time"]).floor(block)
     return df.sort_values("time").groupby(["asset", "block"],
                                           as_index=False).first()
 
@@ -58,7 +66,7 @@ def block_cluster_eval(mask: pd.DataFrame, fwd: pd.DataFrame,
                 "per_year": {}}
     t, cmean, n = clustered_t(df["fwd"], df["block"])
     per_year = {int(y): float(g.mean()) for y, g in
-                df.groupby(pd.to_datetime(df["block"]).dt.year)["fwd"]}
+                df.groupby(pd.DatetimeIndex(df["block"]).year)["fwd"]}
     return {"trades": int(len(df)), "clusters": n,
             "gross": float(df["fwd"].mean()), "cluster_mean": cmean,
             "t": t, "per_year": per_year}

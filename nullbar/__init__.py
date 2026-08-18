@@ -20,7 +20,8 @@ belongs to an unrelated project.)
 """
 from .ledger import TrialLedger
 from .registration import (AlreadySpentError, AmbiguousConditionError,
-                           Registration, SealBrokenError)
+                           BarMismatchError, Registration, SealBrokenError,
+                           spec_text)
 from .stats import (clustered_t, dsr, expected_max_abs_t,
                     expected_max_sharpe, psr, sharpe)
 from .evaluate import (block_cluster_eval, hold_baseline, null_control,
@@ -29,10 +30,10 @@ from .fills import fill_bracket, through_mask, touch_mask
 from .leaklint import (LeakError, LintHit, assert_no_leak, lint_source,
                        prefix_replay_check)
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "TrialLedger", "Registration", "AlreadySpentError", "SealBrokenError",
-    "AmbiguousConditionError",
+    "AmbiguousConditionError", "BarMismatchError", "spec_text",
     "clustered_t", "sharpe", "psr", "dsr", "expected_max_sharpe",
     "expected_max_abs_t",
     "block_cluster_eval", "hold_baseline", "null_control", "null_verdict",
