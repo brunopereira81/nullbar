@@ -2,6 +2,75 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.5.0] — 2026-08-18
+
+The report. A registration, its ledger and its test-look stamp are three
+files that only mean something together; until now the only thing that put
+them side by side was a sequence of `print()` calls in an example. This
+release renders them as one self-contained HTML page — the artifact you hand
+someone who was not in the room.
+
+### Added
+
+- **`nullbar report <registration.json>`** — one HTML file, no external
+  assets, no scripts, prints to PDF. Carries the frozen registration
+  verbatim with its sha256 (so a reader can re-hash it), the trial count
+  against the registered cell budget, the null control, the clustered
+  result, the fill bracket, the deflation against its **95th-percentile**
+  noise threshold, when the single test look was spent and whether it is
+  still bound to this registration, and the bar with each condition's
+  observed value beside its verdict. `--json` emits the same facts as data;
+  `--ledger` supplies the trial count.
+- **Four statuses, and only one is good news**: `PASS`, `FAIL`,
+  `INCOMPLETE` (the record does not establish a verdict — explicitly not a
+  pass) and `CONTRADICTED` (the frozen bar and the recorded grading
+  disagree). `nullbar report` exits non-zero for anything but `PASS`,
+  because in CI an incomplete record must not be indistinguishable from a
+  passing one.
+- **Findings** are raised on the face of the report: a test look not bound
+  to this registration (the design moved after the look was spent), a look
+  stamped before the registration existed, an unreadable stamp, a search
+  that blew its registered cell budget, and a bar that disagrees with its
+  own grading.
+- **`nullbar.evidence(result, null=…, fills=…, conditions=…, **metrics)`** —
+  assembles the test-look payload so the record is complete by construction,
+  and derives the metric vocabulary the bar and the report rely on
+  (`null_max_abs_t`, `hold_gross`, `touch_gross`, `fill_haircut`, …).
+  Explicit metrics always beat derived ones. Prose conditions go through the
+  same fail-closed classifier `verdict()` uses, so a `None` stays visible as
+  invalid instead of being coerced to a quiet `False`.
+- **A `nullbar` console script** with two verbs, `report` and `lint`. Bare
+  paths still lint, so `python3 -m nullbar strategy/` and `nullbar-lint` are
+  unchanged.
+
+### Fixed
+
+- **Every registration was stored under the name of its last bar
+  condition.** The bar-validation loop added in 0.3.0 used `name` as its
+  loop variable, shadowing the registration's own `name` parameter, so
+  `Registration(name="mean-reversion-24h", bar={..., "beats_hold": ...})`
+  froze itself as `beats_hold` — in the file, in its hash, and in the
+  test-look stamp. Affects 0.3.0 and 0.4.0. Found by the first report ever
+  rendered off a frozen file, which is the argument for the feature in one
+  line: the record had been wrong for two releases and no `print()` in any
+  example showed it.
+
+### Notes
+
+- The report reads the record and never recomputes a result from market
+  data — a report that recomputes can quietly report something the
+  registration never graded. The only arithmetic at report time is the
+  deflation simulation, from recorded counts, seeded and reproducible.
+- What is not in the payload is not in the report, and the report says so:
+  missing pieces are listed under *What this record does not contain*
+  rather than rendered as a blank cell.
+- The report inherits the seal's limit and states it on its face: it is
+  tamper-evident, not tamper-proof.
+- 163 tests (was 113). Every new behaviour mutation-checked: twelve
+  mutations, including "no test look reads as PASS", "the deflation quotes
+  the expected maximum instead of the 5% line", and the name-shadowing bug
+  itself — all caught.
+
 ## [0.4.0] — 2026-08-18
 
 A third audit pass, run against 0.3.0, confirmed every earlier finding fixed

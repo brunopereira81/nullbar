@@ -164,6 +164,56 @@ condition; anything that is not a clean boolean (`None`, `NaN`, `0`, a
 float) fails and is named under `invalid`, and an array-valued condition
 raises rather than being guessed at.
 
+## 7. Hand someone the record
+
+```bash
+nullbar report experiments/my_exp.json --ledger experiments/trials.jsonl
+```
+
+One self-contained HTML file — no assets, no scripts, prints to PDF — that
+carries the frozen registration and its sha256 (verbatim, so a reader can
+re-hash it), the trial count against the registered cell budget, the null
+control, the clustered result, the fill bracket, the deflation with its
+**95th-percentile** threshold, when the single test look was spent and
+whether it is still bound to this registration, and the bar with each
+condition's observed value beside its verdict.
+
+Everything in it comes off disk. The report never recomputes a result from
+market data, because a report that recomputes can quietly report something
+the registration never graded. The only arithmetic at report time is the
+deflation simulation, from the recorded cell and cluster counts, seeded.
+
+Build the payload with `evidence()` so the record is complete:
+
+```python
+measured = nullbar.evidence(res, null=nv, fills=bracket,
+                            net=res["gross"] - cost, sr=cell_sharpe,
+                            conditions={"operator_sane": True})
+reg.spend_test_look("experiments/my_exp.json", results=measured)
+```
+
+Spending the look on a bare result is the common mistake — this library's
+own demo did it, and the stamp then could not re-derive two of its three
+conditions. What is not in the payload is not in the report, and the report
+says so out loud: a missing piece is listed under *What this record does not
+contain*, the verdict degrades to **INCOMPLETE**, and `nullbar report` exits
+non-zero. An incomplete record must never be indistinguishable from a
+passing one — least of all in CI.
+
+Four statuses, and only one of them is good news:
+
+| Status | Means |
+|---|---|
+| `PASS` | every registered condition met, graded against the frozen file |
+| `FAIL` | a condition was not met, was graded by a non-boolean, or the search blew its cell budget |
+| `INCOMPLETE` | the record does not establish a verdict — **not** a pass |
+| `CONTRADICTED` | the frozen bar and the recorded grading disagree |
+
+The report inherits the seal's limit: it is tamper-evident, not
+tamper-proof. It binds the look to the registration by hash and says so on
+its face, but a reader who must not trust the researcher needs the frozen
+file and the stamp anchored somewhere the researcher does not control.
+
 ---
 
 ### The deflation cheat sheet

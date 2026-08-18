@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nullbar"
-version = "0.4.0"
+version = "0.5.0"
 description = "Pre-registration and honest statistics for trading research: trial ledgers, deflated Sharpe, clustered inference, leak detection, fill realism."
 readme = "README.md"
 license = { text = "MIT" }
@@ -35,6 +35,7 @@ Changelog = "https://github.com/brunopereira81/nullbar/blob/master/CHANGELOG.md"
 dev = ["pytest>=7.0"]
 
 [project.scripts]
+nullbar = "nullbar.cli:main"
 nullbar-lint = "nullbar.leaklint:main"
 
 [tool.hatch.build.targets.wheel]

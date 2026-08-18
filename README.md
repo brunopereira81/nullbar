@@ -40,6 +40,7 @@ previously consumed months and produced numbers we later had to retract.
 | `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
 | `fills` | Touch/through fill brackets for resting bids and asks | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
 | `leaklint` | Static lookahead lint (CLI) + **prefix-replay check** (sound one way: it cannot see a leak baked into a constant fitted outside the callable) | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
+| `report` | The whole record — registration, hash, ledger, null, result, fills, deflation, test look, graded bar — as one self-contained HTML page | Results that lived as `print()` calls, so what was promised and what was measured were never in the same artifact |
 
 The prefix-replay check deserves a sentence: recompute any feature on a data
 prefix and compare with the full-sample computation at the same rows. **Any
@@ -50,7 +51,9 @@ year.
 ## Install
 
 ```bash
-# from a clone (editable — edits are live):
+pip3 install nullbar
+
+# or from a clone (editable — edits are live):
 git clone https://github.com/brunopereira81/nullbar && cd nullbar
 pip3 install -e .
 
@@ -59,15 +62,13 @@ python3 examples/01_full_workflow.py
 python3 examples/02_catch_a_leak.py
 
 # lint a tree for lookahead patterns:
-python3 -m nullbar strategy/
+nullbar lint strategy/            # or: python3 -m nullbar strategy/
+
+# render a finished registration as one self-contained report:
+nullbar report experiments/mr24.json --ledger experiments/trials.jsonl
 ```
 
 Requires Python 3.10+; numpy and pandas (2.x and 3.x are separate CI legs).
-PyPI release pending — until then, install from the clone.
-
-> Renamed at v0.2.0: this package shipped its first version as `prereg`.
-> The PyPI name `prereg` belongs to an unrelated project (an OSF-oriented
-> pre-registration CLI). Nothing here is affiliated with it.
 
 ## Quickstart
 
@@ -101,11 +102,26 @@ d = nullbar.dsr(observed_sr, n=result["clusters"], n_trials=ledger.count(),
                 sr_variance=ledger.sr_variance())
 
 # 6. Spend the single test look, on the record
-reg.spend_test_look("experiments/mr24.json", results=result)
+measured = nullbar.evidence(result, null=nv, fills=bracket, net=net)
+reg.spend_test_look("experiments/mr24.json", results=measured)
 print(reg.verdict({"null_flat": nv["ok"],
                    "t3": result["t"] >= 3.0,          # numpy bool: fine
                    "beats_hold": net > hold_net}))
 ```
+
+```bash
+# 7. the artifact you hand someone else
+nullbar report experiments/mr24.json --ledger experiments/trials.jsonl
+```
+
+One self-contained HTML page (prints to PDF) carrying the frozen
+registration and its hash, the trial count against the registered budget,
+the null control, the clustered result, the fill bracket, the deflation
+against its **95th-percentile** noise threshold, the spent test look, and
+the bar with every condition's observed value. Nothing is recomputed from
+market data, and anything the record does not contain is listed as missing —
+an incomplete record renders as `INCOMPLETE`, never as a pass, and exits
+non-zero.
 
 ## What this library will not do
 
@@ -126,7 +142,8 @@ somewhere you don't control.
 - **[The honest workflow](docs/workflow.md)** — the six steps, each annotated
   with the production failure it prevents, plus the deflation cheat sheet.
 - **[examples/01_full_workflow.py](examples/01_full_workflow.py)** — the whole
-  sequence end-to-end on synthetic data; runs in seconds, CI-tested.
+  sequence end-to-end on synthetic data; runs in seconds, CI-tested, and
+  writes the report at the end.
 - **[examples/02_catch_a_leak.py](examples/02_catch_a_leak.py)** — four
   features, two leaks, one 50ms check; includes the leak that inspired the
   library.
@@ -136,12 +153,14 @@ somewhere you don't control.
 
 ## Status
 
-`v0.4.0` — extracted 2026-08-12 from a live production system
-(Coinbase spot, TimescaleDB, 2,100+ tests), renamed and hardened 2026-08-18
-across three independent audit passes, 27 distinct findings. The ones worth
-knowing: `verdict()` could grade a failing strategy as PASS, `fill_bracket`
-could overstate 9× on misaligned axes, `clustered_t` inflated t when a
-cluster held no finite observation, and the frozen bar could say something
-different from the code grading it. All fixed, each mutation-checked, in the
-[CHANGELOG](CHANGELOG.md). API will move; the philosophy won't. MIT licensed
-— the statistics stay open, permanently.
+`v0.5.0` — extracted 2026-08-12 from a live production system
+(Coinbase spot, TimescaleDB, 2,100+ tests), then put through three
+independent audit passes. Every finding is fixed, each one mutation-checked
+against a test that fails when the bug is restored; the full list is in the
+[CHANGELOG](CHANGELOG.md). The ones worth knowing, because they are the
+failure modes this library is about: `verdict()` could grade a failing
+strategy as PASS, `fill_bracket` could overstate 9× on misaligned axes,
+`clustered_t` inflated t when a cluster held no finite observation, and the
+frozen bar could say something different from the code grading it. API will
+move; the philosophy won't. MIT licensed — the statistics stay open,
+permanently.
