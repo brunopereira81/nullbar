@@ -12,6 +12,9 @@ trading, that is what happened to us, over and over, despite code review,
 2,000+ tests, and genuine care. `nullbar` is the machinery that caught it,
 extracted into a standalone package.
 
+The name is the two things it makes you commit to before you are allowed to
+believe a number: the **null** control and the pre-registered **bar**.
+
 ## The one-day story this library made possible
 
 On 2026-08-11 we designed a new ML model (a cross-sectional transformer over
@@ -31,12 +34,12 @@ previously consumed months and produced numbers we later had to retract.
 
 | Module | What it does | The bug it exists because of |
 |---|---|---|
-| `registration` | Freeze design + pass bar before results; **one** test look, enforced | "One more epoch, one more threshold" after seeing test data |
-| `ledger` | Append-only trial count (no delete API) | A t=2.68 celebrated against a best-of-64 noise threshold of ~2.7 |
-| `stats` | Clustered t, PSR/DSR in strictly per-period units; `dsr` returns `None`, never 0, for unknown trial counts | Overlapping windows inflating results 1.9×; a gate that logged PSR=0.000 for months because annualized and per-period units were mixed |
-| `evaluate` | Block-clustered evaluation + shuffled null controls | Pipelines that "find" effects their own machinery created |
+| `registration` | Freeze design + pass bar before results; **one** test look, enforced; verdicts graded fail-closed against the file on disk | "One more epoch, one more threshold" after seeing test data |
+| `ledger` | Append-only trial count with per-trial metrics (no delete API) | A t=2.68 celebrated against a best-of-64 noise threshold of ~2.6 |
+| `stats` | Clustered t, PSR/DSR in strictly per-period units; `dsr` returns `None`, never 0, when the trial count or the spread is unknown | Overlapping windows inflating results 1.9×; a gate that logged PSR=0.000 for months because annualized and per-period units were mixed |
+| `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
 | `fills` | Touch/through fill brackets for resting orders | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
-| `leaklint` | Static lookahead lint + **prefix-replay check** | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
+| `leaklint` | Static lookahead lint (CLI) + **prefix-replay check** | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
 
 The prefix-replay check deserves a sentence: recompute any feature on a data
 prefix and compare with the full-sample computation at the same rows. **Any
@@ -49,15 +52,22 @@ year.
 ```bash
 # from a clone (editable — edits are live):
 git clone https://github.com/brunopereira81/nullbar && cd nullbar
-pip install -e .
+pip3 install -e .
 
 # run the examples:
 python3 examples/01_full_workflow.py
 python3 examples/02_catch_a_leak.py
+
+# lint a tree for lookahead patterns:
+python3 -m nullbar strategy/
 ```
 
-Requires Python 3.10+; numpy and pandas (2.x and 3.x both tested in CI).
+Requires Python 3.10+; numpy and pandas (2.x and 3.x are separate CI legs).
 PyPI release pending — until then, install from the clone.
+
+> Renamed at v0.2.0: this package shipped its first version as `prereg`.
+> The PyPI name `prereg` belongs to an unrelated project (an OSF-oriented
+> pre-registration CLI). Nothing here is affiliated with it.
 
 ## Quickstart
 
@@ -69,30 +79,32 @@ reg = nullbar.Registration(
     name="mean-reversion-24h",
     hypothesis="bottom-decile dist_ma168 mean-reverts over 24h",
     design={"hold_bars": 24, "entry_pct": 0.10, "cost_pct": 0.230},
-    bar={"null_flat": "null-control |t| ~ 0",
+    bar={"null_flat": "null control indistinguishable from holding",
          "t3": "clustered t >= 3.0 on 24h blocks",
          "beats_hold": "net beats unconditional exposure"},
 )
 reg.freeze("experiments/mr24.json")          # hashed; edits now visible
 
-# 2. Count every variant you evaluate
+# 2. Count every variant you evaluate — with its Sharpe
 ledger = nullbar.TrialLedger("experiments/trials.jsonl")
-ledger.record("mr24", {"entry_pct": 0.10})
+ledger.record("mr24", {"entry_pct": 0.10}, metrics={"sr": cell_sharpe})
 
-# 3. Null control FIRST, then the real number, clustered
-nulls = nullbar.null_control(entry_mask, fwd_returns)      # must be flat
+# 3. Null control FIRST — against the hold baseline, not against zero
+nv = nullbar.null_verdict(entry_mask, fwd_returns)        # nv["ok"] must hold
 result = nullbar.block_cluster_eval(entry_mask, fwd_returns)
 
 # 4. Price fills honestly
 bracket = nullbar.fill_bracket(entry_mask, limit_px, low_px, fwd_returns)
 
 # 5. Deflate by what you actually searched
-d = nullbar.dsr(observed_sr, n=n_periods, n_trials=ledger.count(),
-               sr_variance=var_across_trials)
+d = nullbar.dsr(observed_sr, n=result["clusters"], n_trials=ledger.count(),
+                sr_variance=ledger.sr_variance())
 
 # 6. Spend the single test look, on the record
-reg.spend_test_look("experiments/mr24.json", results={...})
-print(reg.verdict({"null_flat": True, "t3": False, "beats_hold": True}))
+reg.spend_test_look("experiments/mr24.json", results=result)
+print(reg.verdict({"null_flat": nv["ok"],
+                   "t3": result["t"] >= 3.0,          # numpy bool: fine
+                   "beats_hold": net > hold_net}))
 ```
 
 ## What this library will not do
@@ -103,20 +115,30 @@ costs — and we can prove it, which is the point. If your strategy survives
 this harness, you have something. If it doesn't, you found out for the price
 of compute instead of capital.
 
+It is also tamper-**evident**, not tamper-proof: it grades the frozen file
+and binds the test-look stamp to that file's hash, but anyone with write
+access can delete both. It is built for a researcher keeping themselves
+honest. If a third party has to believe the record, commit it — or anchor it
+somewhere you don't control.
+
 ## Docs & examples
 
 - **[The honest workflow](docs/workflow.md)** — the six steps, each annotated
   with the production failure it prevents, plus the deflation cheat sheet.
 - **[examples/01_full_workflow.py](examples/01_full_workflow.py)** — the whole
   sequence end-to-end on synthetic data; runs in seconds, CI-tested.
-- **[examples/02_catch_a_leak.py](examples/02_catch_a_leak.py)** — three
+- **[examples/02_catch_a_leak.py](examples/02_catch_a_leak.py)** — four
   features, two leaks, one 50ms check; includes the leak that inspired the
   library.
 - **[The leak that survived two years](docs/posts/the-leak-that-survived-two-years.md)**
   — the full story.
+- **[CHANGELOG](CHANGELOG.md)** — what moved, and why.
 
 ## Status
 
-`v0.1.0` — extracted 2026-08-12 from a live production system
-(Coinbase spot, TimescaleDB, 2,100+ tests). API will move; the philosophy
-won't. MIT licensed — the statistics stay open, permanently.
+`v0.2.0` — extracted 2026-08-12 from a live production system
+(Coinbase spot, TimescaleDB, 2,100+ tests), renamed and hardened 2026-08-18
+after an external audit (see the CHANGELOG: `verdict()` could pass a failing
+strategy, `fill_bracket` could overstate 9× on misaligned axes). API will
+move; the philosophy won't. MIT licensed — the statistics stay open,
+permanently.

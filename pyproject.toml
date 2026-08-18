@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nullbar"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pre-registration and honest statistics for trading research: trial ledgers, deflated Sharpe, clustered inference, leak detection, fill realism."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Bruno Pereira" }]
 keywords = ["backtesting", "overfitting", "deflated-sharpe", "pre-registration",
-            "quantitative-finance", "leak-detection"]
+            "quantitative-finance", "leak-detection", "lookahead-bias"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
@@ -29,9 +29,16 @@ dependencies = ["numpy>=1.24", "pandas>=2.0"]
 Homepage = "https://github.com/brunopereira81/nullbar"
 Repository = "https://github.com/brunopereira81/nullbar"
 Issues = "https://github.com/brunopereira81/nullbar/issues"
+Changelog = "https://github.com/brunopereira81/nullbar/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+
+[project.scripts]
+nullbar-lint = "nullbar.leaklint:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nullbar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,14 +3,23 @@ implementation. Several encode production bugs this library exists to
 prevent — if a refactor reintroduces one, its test fails."""
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from nullbar import (AlreadySpentError, Registration, TrialLedger,
-                    block_cluster_eval, clustered_t, dsr, expected_max_abs_t,
-                    expected_max_sharpe, fill_bracket, lint_source,
-                    null_control, prefix_replay_check, psr, sharpe)
+import nullbar
+from nullbar import (AlreadySpentError, AmbiguousConditionError, LeakError,
+                     Registration, SealBrokenError, TrialLedger,
+                     assert_no_leak, block_cluster_eval, clustered_t, dsr,
+                     expected_max_abs_t, expected_max_sharpe, fill_bracket,
+                     hold_baseline, lint_source, null_control, null_verdict,
+                     prefix_replay_check, psr, sharpe, touch_mask)
+
+ROOT = Path(__file__).parent.parent
 
 
 # ── stats ────────────────────────────────────────────────────────────────────
@@ -30,6 +39,18 @@ class TestClusteredT:
     def test_degenerate_returns_nan_not_infinity(self):
         t, m, n = clustered_t(pd.Series([1.0, 1.0]), pd.Series([0, 1]))
         assert np.isnan(t) and n == 2
+
+    def test_misaligned_series_raise_instead_of_pairing_positionally(self):
+        # values from one filter paired with another filter's labels is a
+        # wrong answer that looks right; pandas would have silently zipped.
+        v = pd.Series([1.0, 2.0, 3.0], index=[0, 1, 2])
+        c = pd.Series(["a", "b", "c"], index=[7, 8, 9])
+        with pytest.raises(ValueError):
+            clustered_t(v, c)
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            clustered_t(np.array([1.0, 2.0, 3.0]), np.array([0, 1]))
 
 
 class TestPSRDSR:
@@ -52,6 +73,11 @@ class TestPSRDSR:
         # unmeasured must never read as a verdict — the PSR=0.000 logs bug
         assert dsr(0.1, n=500, n_trials=None, sr_variance=0.01) is None
 
+    def test_dsr_refuses_unknown_spread(self):
+        # the other half of "unmeasured is not a verdict": both demos used
+        # to invent sr_variance rather than record it
+        assert dsr(0.1, n=500, n_trials=64, sr_variance=None) is None
+
     def test_dsr_deflates_with_trial_count(self):
         d1 = dsr(0.1, n=500, n_trials=1, sr_variance=0.002)
         d64 = dsr(0.1, n=500, n_trials=64, sr_variance=0.002)
@@ -62,7 +88,12 @@ class TestPSRDSR:
         b = expected_max_sharpe(64, 0.01)
         assert 0 < a < b
 
-    def test_expected_max_abs_t_matches_known_anchors(self):
+    def test_sharpe_ignores_nans(self):
+        assert np.isfinite(sharpe([0.1, np.nan, -0.05, 0.2, 0.05]))
+
+
+class TestExpectedMaxAbsT:
+    def test_matches_known_normal_anchors(self):
         # analytic anchors for iid standard-normal cells: E[max|Z|] of 1 is
         # E|Z| = sqrt(2/pi) ~ 0.798; 64 cells ~ 2.66 — the threshold that
         # swallowed a t of 2.68 in production. Monotone in between.
@@ -72,8 +103,35 @@ class TestPSRDSR:
         assert (expected_max_abs_t(4) < expected_max_abs_t(16)
                 < expected_max_abs_t(64))
 
-    def test_sharpe_ignores_nans(self):
-        assert np.isfinite(sharpe([0.1, np.nan, -0.05, 0.2, 0.05]))
+    def test_t_tails_raise_the_bar_on_few_clusters(self):
+        # the normal approximation flatters: real cluster-level t on 11
+        # clusters has fatter tails, so the luck threshold is HIGHER.
+        normal = expected_max_abs_t(16)
+        few = expected_max_abs_t(16, df=10)         # 11 clusters
+        assert few > normal * 1.10                  # audited at ~+18%
+
+    def test_converges_to_the_normal_in_the_large_sample_limit(self):
+        assert expected_max_abs_t(16, df=5000) == pytest.approx(
+            expected_max_abs_t(16), rel=0.02)
+
+    def test_seeded_and_finite_for_a_large_search(self):
+        # chunked over the simulation axis: 2000 cells used to allocate
+        # n_sims x n_cells in one array (~1.6 GB at 1000 cells).
+        a = expected_max_abs_t(2000, n_sims=500)
+        b = expected_max_abs_t(2000, n_sims=500)
+        assert np.isfinite(a) and a == b
+
+    def test_docs_quote_the_function_they_cite(self):
+        # the cheat sheet in docs/workflow.md said 1.6 / 2.2 / 2.7 while the
+        # function it names returns 1.47 / 2.08 / 2.60. One shipped artifact
+        # has to be wrong; this test decides which.
+        rows = re.findall(r"\|\s*(\d+) cells?\s*\|\s*([0-9.]+)\s*\|",
+                          (ROOT / "docs" / "workflow.md").read_text())
+        assert len(rows) >= 4, "cheat-sheet table not found"
+        for cells, quoted in rows:
+            assert float(quoted) == pytest.approx(
+                expected_max_abs_t(int(cells)), abs=0.02), \
+                f"docs say {quoted} for {cells} cells"
 
 
 # ── ledger ───────────────────────────────────────────────────────────────────
@@ -93,6 +151,33 @@ class TestLedger:
     def test_no_delete_api(self):
         assert not any(m for m in dir(TrialLedger)
                        if "delete" in m or "remove" in m or "clear" in m)
+
+    def test_dedupes_against_rows_another_writer_appended(self, tmp_path):
+        # the in-memory hash cache must not blind a ledger to the file
+        p = tmp_path / "trials.jsonl"
+        a, b = TrialLedger(p), TrialLedger(p)
+        a.record("x", {"i": 1})
+        b.record("x", {"i": 1})                 # same cell, other instance
+        assert TrialLedger(p).count() == 1
+
+    def test_feeds_dsr_without_inventing_a_spread(self, tmp_path):
+        # the design gap: dsr needs sr_variance and the ledger had no
+        # metrics, so both shipped demos faked it.
+        led = TrialLedger(tmp_path / "t.jsonl")
+        assert led.sr_variance() is None                  # nothing recorded
+        for i, sr in enumerate([0.01, 0.05, 0.02, 0.03]):
+            led.record("cell", {"i": i}, metrics={"sr": sr})
+        assert led.sr_variance() == pytest.approx(
+            float(np.var([0.01, 0.05, 0.02, 0.03], ddof=1)))
+        assert dsr(0.05, n=500, n_trials=led.count(),
+                   sr_variance=led.sr_variance()) is not None
+
+    def test_one_recorded_sharpe_is_not_a_spread(self, tmp_path):
+        led = TrialLedger(tmp_path / "t.jsonl")
+        led.record("cell", {"i": 0}, metrics={"sr": 0.02})
+        assert led.sr_variance() is None
+        assert dsr(0.05, n=500, n_trials=1,
+                   sr_variance=led.sr_variance()) is None
 
 
 # ── registration ─────────────────────────────────────────────────────────────
@@ -132,11 +217,110 @@ class TestRegistration:
         assert not v["pass"]
 
 
+class TestVerdictFailsClosed:
+    """S1: `conditions.get(k) is False` is identity against the singleton,
+    so every naturally-computed condition sailed through as a pass."""
+
+    def _reg(self):
+        return Registration(name="x", hypothesis="h", design={},
+                            bar={"t3": "clustered t >= 3.0"})
+
+    def test_the_headline_number_fails_as_it_should(self):
+        t = 2.42                                  # the real OOS result
+        v = self._reg().verdict({"t3": t >= 3.0})  # np.False_ / bool
+        assert v["pass"] is False and v["failed"] == ["t3"]
+
+    def test_numpy_false_is_a_failure(self):
+        v = self._reg().verdict({"t3": np.bool_(False)})
+        assert v["pass"] is False and v["failed"] == ["t3"]
+
+    def test_numpy_true_still_passes(self):
+        assert self._reg().verdict({"t3": np.bool_(True)})["pass"] is True
+
+    def test_pandas_scalar_comparison(self):
+        s = pd.Series([2.42])
+        assert self._reg().verdict({"t3": (s >= 3.0).all()})["pass"] is False
+        assert self._reg().verdict({"t3": (s >= 2.0).all()})["pass"] is True
+
+    @pytest.mark.parametrize("value", [None, 0, 1, "", "yes", float("nan"),
+                                       np.float64(4.0), pd.NA])
+    def test_non_boolean_conditions_fail_and_are_named(self, value):
+        v = self._reg().verdict({"t3": value})
+        assert v["pass"] is False
+        assert v["failed"] == ["t3"] and "t3" in v["invalid"]
+
+    def test_array_condition_raises_rather_than_guessing(self):
+        with pytest.raises(AmbiguousConditionError):
+            self._reg().verdict({"t3": np.array([True, False])})
+        with pytest.raises(AmbiguousConditionError):
+            self._reg().verdict({"t3": pd.Series([True, True])})
+
+
+class TestTheSeal:
+    """S3: the verdict graded memory, the stamp was bound to nothing."""
+
+    def _frozen(self, tmp_path):
+        r = Registration(name="x", hypothesis="h", design={"hold": 24},
+                         bar={"t3": "clustered t >= 3.0"})
+        p = tmp_path / "reg.json"
+        return r, p, r.freeze(p)
+
+    def test_lowering_the_bar_in_memory_is_refused(self, tmp_path):
+        r, p, _ = self._frozen(tmp_path)
+        r.doc["bar"]["t3"] = "clustered t >= 2.0"
+        with pytest.raises(SealBrokenError):
+            r.verdict({"t3": True})
+
+    def test_editing_the_frozen_file_is_refused(self, tmp_path):
+        r, p, _ = self._frozen(tmp_path)
+        doc = json.loads(p.read_text())
+        doc["bar"]["t3"] = "clustered t >= 2.0"
+        p.write_text(json.dumps(doc, indent=2, sort_keys=True))
+        with pytest.raises(SealBrokenError):
+            r.verdict({"t3": True})
+
+    def test_deleting_the_registration_is_refused(self, tmp_path):
+        r, p, _ = self._frozen(tmp_path)
+        p.unlink()
+        with pytest.raises(SealBrokenError):
+            r.verdict({"t3": True})
+
+    def test_loaded_registration_grades_the_file(self, tmp_path):
+        r, p, digest = self._frozen(tmp_path)
+        v = Registration.load(p).verdict({"t3": True})
+        assert v["verified"] is True and v["sha256"] == digest
+
+    def test_unfrozen_registration_says_it_is_unverified(self):
+        r = Registration(name="x", hypothesis="h", design={},
+                         bar={"t3": "t >= 3"})
+        assert r.verdict({"t3": True})["verified"] is False
+
+    def test_stamp_is_bound_to_the_registration_hash(self, tmp_path):
+        r, p, digest = self._frozen(tmp_path)
+        r.spend_test_look(p, {"t": 2.42})
+        stamp = json.loads((tmp_path / "reg.test_look.json").read_text())
+        assert stamp["registration_sha256"] == digest
+        status = r.seal_status(p)
+        assert status["test_look_spent"] and status["stamp_bound"]
+
+    def test_a_spent_look_is_visible_in_the_verdict(self, tmp_path):
+        r, p, _ = self._frozen(tmp_path)
+        assert r.verdict({"t3": True})["test_look_spent"] is False
+        r.spend_test_look(p, {"t": 2.42})
+        assert r.verdict({"t3": True})["test_look_spent"] is True
+
+    def test_a_look_cannot_be_spent_on_a_moved_bar(self, tmp_path):
+        r, p, _ = self._frozen(tmp_path)
+        r.doc["bar"]["t3"] = "clustered t >= 2.0"
+        with pytest.raises(SealBrokenError):
+            r.spend_test_look(p, {"t": 2.42})
+
+
 # ── evaluate ─────────────────────────────────────────────────────────────────
-def _toy(seed=0, n=2000, k=6):
+def _toy(seed=0, n=2000, k=6, drift=0.0):
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
-    fwd = pd.DataFrame(rng.normal(0, 1.0, (n, k)), index=idx,
+    fwd = pd.DataFrame(rng.normal(drift, 1.0, (n, k)), index=idx,
                        columns=[f"A{i}" for i in range(k)])
     mask = pd.DataFrame(rng.random((n, k)) < 0.1, index=idx,
                         columns=fwd.columns)
@@ -180,6 +364,52 @@ class TestEvaluate:
         with pytest.raises(ValueError):
             block_cluster_eval(mask.iloc[:, :3], fwd)
 
+    def test_no_trades_still_answers_every_question(self):
+        # a strategy that took nothing is exactly when a caller KeyErrors
+        mask, fwd = _toy()
+        r = block_cluster_eval(mask & False, fwd)
+        assert r["trades"] == 0 and r["per_year"] == {}
+
+
+class TestNullVerdict:
+    """S6: the docs demanded a comparison the library did not implement, so
+    a null's raw |t| got quoted as 'OK' next to an effect it exceeded."""
+
+    def test_hold_baseline_is_the_unconditional_mean(self):
+        _, fwd = _toy(drift=0.30, n=4000)
+        assert hold_baseline(fwd)["gross"] == pytest.approx(0.30, abs=0.05)
+
+    def test_drift_does_not_read_as_a_broken_pipeline(self):
+        mask, fwd = _toy(drift=0.30, n=4000)
+        nv = null_verdict(mask, fwd)
+        assert max(abs(x["t"]) for x in nv["nulls"]) > 3.0   # vs zero: scary
+        assert nv["ok"] and nv["measured"]                   # correctly: fine
+
+    def test_reference_is_what_the_mask_holds_not_equal_weight(self):
+        # known answer: asset A pays +3 unconditionally, B pays 0. A mask
+        # that only ever holds A must be referenced against ~3, not against
+        # the 1.5 an equal-weight basket pays. Referencing equal-weight
+        # reported "pipeline broken" for a sound pipeline on real data.
+        idx = pd.date_range("2024-01-01", periods=4000, freq="h", tz="UTC")
+        rng = np.random.default_rng(11)
+        fwd = pd.DataFrame({"A": rng.normal(3.0, 1.0, 4000),
+                            "B": rng.normal(0.0, 1.0, 4000)}, index=idx)
+        mask = pd.DataFrame(False, index=idx, columns=["A", "B"])
+        mask.iloc[::7, 0] = True
+        nv = null_verdict(mask, fwd)
+        assert nv["expected_gross"] == pytest.approx(3.0, abs=0.15)
+        assert nv["hold"]["gross"] == pytest.approx(1.5, abs=0.15)
+        assert nv["ok"]
+
+    def test_threshold_is_applied(self):
+        mask, fwd = _toy(n=2000)
+        assert null_verdict(mask, fwd, max_abs_t=0.0)["ok"] is False
+
+    def test_unmeasurable_null_is_not_a_pass(self):
+        mask, fwd = _toy(n=200)
+        nv = null_verdict(mask & False, fwd)
+        assert nv["measured"] is False and nv["ok"] is False
+
 
 # ── fills ────────────────────────────────────────────────────────────────────
 class TestFills:
@@ -207,6 +437,32 @@ class TestFills:
         b = fill_bracket(mask, limit, low, fwd, margin=5e-4)
         assert b["through"]["n"] <= b["touch"]["n"] <= b["assumed"]["n"]
 
+    def test_column_swap_raises_instead_of_reporting_another_asset(self):
+        # S2: measured before the fix — a swap turned a true gross of 1.0
+        # into 9.0, silently, in the module that exists to correct a 1.3x
+        # overstatement.
+        idx = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+        limit = pd.DataFrame({"A": [100.0] * 6, "B": [100.0] * 6}, index=idx)
+        low = pd.DataFrame({"A": [99.0] * 6, "B": [99.0] * 6}, index=idx)
+        fwd = pd.DataFrame({"A": [1.0] * 6, "B": [9.0] * 6}, index=idx)
+        mask = pd.DataFrame({"A": [True] * 6, "B": [False] * 6}, index=idx)
+        assert fill_bracket(mask, limit, low, fwd)["touch"]["gross"] == 1.0
+        with pytest.raises(ValueError):
+            fill_bracket(mask, limit, low, fwd[["B", "A"]])
+
+    def test_index_mismatch_raises(self):
+        idx = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+        f = pd.DataFrame({"A": [1.0] * 6}, index=idx)
+        m = pd.DataFrame({"A": [True] * 6}, index=idx)
+        with pytest.raises(ValueError):
+            fill_bracket(m, f, f, f.iloc[:4])
+
+    def test_touch_mask_checks_its_own_pair(self):
+        idx = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+        limit = pd.DataFrame({"A": [100.0] * 6, "B": [100.0] * 6}, index=idx)
+        with pytest.raises(ValueError):
+            touch_mask(limit, limit[["B", "A"]])
+
 
 # ── leaklint ─────────────────────────────────────────────────────────────────
 class TestLeakLint:
@@ -218,6 +474,40 @@ class TestLeakLint:
             "z = df.rolling(5).mean()  # fine\n")
         hits = lint_source([src])
         assert {h.line for h in hits} == {1, 2}
+
+    def test_hash_inside_a_string_does_not_hide_the_leak(self, tmp_path):
+        # S7: splitting on '#' truncated at a string literal — a false
+        # NEGATIVE in a leak detector
+        src = tmp_path / "feat.py"
+        src.write_text('label = "close # then"; x = df.shift(-1)\n')
+        assert [h.line for h in lint_source([src])] == [1]
+
+    def test_commented_out_code_is_not_flagged(self, tmp_path):
+        src = tmp_path / "feat.py"
+        src.write_text("z = 1  # df.shift(-1) was here\n")
+        assert lint_source([src]) == []
+
+    def test_suppression_comment(self, tmp_path):
+        src = tmp_path / "feat.py"
+        src.write_text("x = df.shift(-1)  # noqa: leak (label, not feature)\n")
+        assert lint_source([src]) == []
+
+    def test_directory_walk(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "a.py").write_text("x = df.shift(-1)\n")
+        (tmp_path / "pkg" / "b.py").write_text("y = 1\n")
+        assert len(lint_source([tmp_path])) == 1
+
+    def test_cli_exit_codes(self, tmp_path, capsys):
+        from nullbar.leaklint import main
+        clean, dirty = tmp_path / "c.py", tmp_path / "d.py"
+        clean.write_text("y = 1\n")
+        dirty.write_text("x = df.shift(-1)\n")
+        assert main([str(clean)]) == 0
+        assert main([str(dirty)]) == 1
+        assert main([str(dirty), "--severity", "high"]) == 1
+        assert main([str(dirty), "--exit-zero"]) == 0
+        assert "shift" in capsys.readouterr().out
 
     def test_prefix_replay_catches_full_sample_normalization(self):
         idx = pd.date_range("2024-01-01", periods=400, freq="h")
@@ -250,3 +540,77 @@ class TestLeakLint:
             daily = d["c"].resample("1D").last()
             return daily.reindex(d.index, method="ffill")
         assert prefix_replay_check(leaky_mtf, df)["leak"] is True
+
+    def test_dropped_warmup_rows_are_not_a_leak(self):
+        # S5: positional comparison made every warm-up-dropping feature a
+        # crash ("operands could not be broadcast"), i.e. a false alarm on
+        # correct code — and a leak checker that cries wolf gets disabled
+        idx = pd.date_range("2024-01-01", periods=300, freq="h")
+        df = pd.DataFrame({"c": np.random.default_rng(3).normal(0, 1, 300)},
+                          index=idx)
+        rep = prefix_replay_check(lambda d: d.rolling(24).mean().dropna(), df)
+        assert rep["leak"] is False and rep["rows_compared"] > 0
+
+    def test_non_numeric_features_are_compared_not_cast(self):
+        idx = pd.date_range("2024-01-01", periods=300, freq="h")
+        df = pd.DataFrame({"c": np.random.default_rng(4).normal(0, 1, 300)},
+                          index=idx)
+        causal = lambda d: pd.Series(np.where(d["c"] > 0, "up", "down"),
+                                     index=d.index)
+        leaky = lambda d: pd.Series(
+            np.where(d["c"] > d["c"].mean(), "up", "down"), index=d.index)
+        assert prefix_replay_check(causal, df)["leak"] is False
+        assert prefix_replay_check(leaky, df)["leak"] is True
+
+    def test_a_check_that_compared_nothing_is_not_a_pass(self):
+        idx = pd.date_range("2024-01-01", periods=100, freq="h")
+        df = pd.DataFrame({"c": np.arange(100.0)}, index=idx)
+        rep = prefix_replay_check(lambda d: d.iloc[0:0], df)
+        assert rep["leak"] is False and rep["checked"] is False
+        with pytest.raises(LeakError):
+            assert_no_leak(rep, "empty")
+
+    def test_assert_no_leak_names_the_feature(self):
+        idx = pd.date_range("2024-01-01", periods=200, freq="h")
+        df = pd.DataFrame({"c": np.random.default_rng(5).normal(0, 1, 200)},
+                          index=idx)
+        with pytest.raises(LeakError, match="zscore"):
+            assert_no_leak(prefix_replay_check(
+                lambda d: (d - d.mean()) / d.std(), df), "zscore")
+
+
+# ── packaging ────────────────────────────────────────────────────────────────
+class TestPackaging:
+    def test_version_matches_pyproject(self):
+        txt = (ROOT / "pyproject.toml").read_text()
+        assert f'version = "{nullbar.__version__}"' in txt
+
+    def test_module_entry_point_runs(self, tmp_path):
+        import subprocess
+        import sys
+        clean = tmp_path / "ok.py"
+        clean.write_text("x = df.rolling(24).mean()\n")
+        r = subprocess.run([sys.executable, "-m", "nullbar", str(clean)],
+                           capture_output=True, text=True, cwd=ROOT)
+        assert r.returncode == 0, r.stderr
+        assert "0 hit(s)" in r.stdout
+
+    def test_ships_type_information(self):
+        assert (ROOT / "nullbar" / "py.typed").exists()
+
+    def test_no_stale_references_to_the_old_name(self):
+        # the package was renamed at 0.2.0; an import of the old name left
+        # in a doc or an example is an install nobody can reproduce.
+        # CHANGELOG.md is exempt: it has to name the old import to tell
+        # people what to change.
+        old = "pre" + "reg"          # spelled out so this file never self-matches
+        pat = re.compile(rf"\b(import {old}\b|from {old}\b|{old}\.[a-z_]+\()")
+        stale = []
+        for p in list(ROOT.rglob("*.py")) + list(ROOT.rglob("*.md")):
+            if ".git" in p.parts or "dist" in p.parts \
+                    or p.name == "CHANGELOG.md":
+                continue
+            for i, line in enumerate(p.read_text().splitlines(), 1):
+                if pat.search(line):
+                    stale.append(f"{p.relative_to(ROOT)}:{i}")
+        assert not stale, f"stale imports of the old name: {stale}"

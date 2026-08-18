@@ -1,12 +1,13 @@
 """Catching lookahead leaks with the prefix-replay check.
 
-Run:  python examples/02_catch_a_leak.py
+Run:  python3 examples/02_catch_a_leak.py
 
-Three feature functions on the same data. One is honest. Two leak — one of
-them in the exact shape that survived two years in the production system
-this library was extracted from: higher-timeframe aggregates mapped onto the
-lower-timeframe bars INSIDE the aggregation bucket, so every hour sees its
-own day's close, which happens in the future.
+Four feature functions on the same data. Two are honest — including one that
+drops its warm-up rows, which a positional check would call a leak. Two leak
+— one of them in the exact shape that survived two years in the production
+system this library was extracted from: higher-timeframe aggregates mapped
+onto the lower-timeframe bars INSIDE the aggregation bucket, so every hour
+sees its own day's close, which happens in the future.
 
 The check is one idea: recompute the feature on a PREFIX of the data. If any
 past value changes when the future is appended, the feature is leaking —
@@ -17,7 +18,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from nullbar import lint_source, prefix_replay_check
+from nullbar import (LeakError, assert_no_leak, lint_source,
+                     prefix_replay_check)
 
 rng = np.random.default_rng(3)
 idx = pd.date_range("2024-01-01", periods=24 * 60, freq="h", tz="UTC")
@@ -28,6 +30,12 @@ df = pd.DataFrame({"close": 100 + rng.normal(0, 1, len(idx)).cumsum()},
 def causal_feature(d: pd.DataFrame) -> pd.Series:
     """Distance from a trailing moving average — honest."""
     return np.log(d["close"] / d["close"].rolling(168, min_periods=168).mean())
+
+
+def warmup_dropped(d: pd.DataFrame) -> pd.Series:
+    """Also honest, and shorter than its input. The check aligns on the
+    index, so dropping warm-up rows is not mistaken for a leak."""
+    return d["close"].rolling(24).mean().dropna()
 
 
 def zscore_leak(d: pd.DataFrame) -> pd.Series:
@@ -46,6 +54,7 @@ def mtf_leak(d: pd.DataFrame) -> pd.Series:
 
 
 for name, fn in [("causal_feature", causal_feature),
+                 ("warmup_dropped", warmup_dropped),
                  ("zscore_leak", zscore_leak),
                  ("mtf_leak", mtf_leak)]:
     r = prefix_replay_check(fn, df)
@@ -56,6 +65,14 @@ for name, fn in [("causal_feature", causal_feature),
         detail = f"  (first bad row at {first['first_bad_row']})"
     print(f"{name:16s} -> {flag}{detail}")
 
+# In a test suite you want the failure, not the dict. assert_no_leak also
+# refuses to pass a check that compared nothing.
+try:
+    assert_no_leak(prefix_replay_check(mtf_leak, df), "mtf_leak")
+except LeakError as e:
+    print(f"\nassert_no_leak: {e}")
+
 print("\nStatic lint of this very file:")
 for h in lint_source([__file__]):
     print(f"  line {h.line:3d} [{h.severity}] {h.message}")
+print("(run it over a whole tree with: python3 -m nullbar strategy/)")

@@ -22,11 +22,14 @@ def _run(name: str) -> str:
 def test_full_workflow_example():
     out = _run("01_full_workflow.py")
     assert "VERDICT: PASS" in out          # the planted effect is real
+    assert "graded against the frozen file: True" in out
     assert "second test look refused" in out
 
 
 def test_catch_a_leak_example():
     out = _run("02_catch_a_leak.py")
     assert "causal_feature   -> clean" in out
+    assert "warmup_dropped   -> clean" in out      # not a leak, and not a crash
     assert "zscore_leak      -> LEAK" in out
     assert "mtf_leak         -> LEAK" in out
+    assert "assert_no_leak: mtf_leak: LEAK" in out

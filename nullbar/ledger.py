@@ -4,6 +4,10 @@ Every deflated statistic needs the TOTAL count of variants ever evaluated in
 the search, including the embarrassing ones. Human memory reliably reports
 "just this one idea"; the ledger is append-only JSONL that reports the truth.
 
+Record the METRICS with each trial (``metrics={"sr": ...}``) and the ledger
+can also supply the OTHER number deflation needs — the spread of Sharpes
+across the search — instead of leaving you to invent it.
+
 There is deliberately NO delete API. If a trial was run, it counts.
 """
 from __future__ import annotations
@@ -14,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+import numpy as np
+
 
 class TrialLedger:
     """Append-only record of evaluated strategy variants ("cells")."""
@@ -21,6 +27,8 @@ class TrialLedger:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rows: list[dict[str, Any]] | None = None
+        self._size: int = -1
 
     @staticmethod
     def _hash(params: dict[str, Any]) -> str:
@@ -28,33 +36,76 @@ class TrialLedger:
             json.dumps(params, sort_keys=True, default=str).encode()
         ).hexdigest()[:16]
 
-    def record(self, name: str, params: dict[str, Any],
-               note: str = "") -> str:
-        """Append one evaluated cell. Returns its params-hash.
-
-        Re-recording an identical (name, params) pair is a no-op — running
-        the same cell twice is one trial, not two.
+    # ── reading ─────────────────────────────────────────────────────────────
+    def _scan(self) -> list[dict[str, Any]]:
+        """Rows, cached. Re-reads only when the file has changed size, so
+        recording N trials costs O(N) reads and not O(N^2) — a 20k-cell
+        sweep spent ~10 minutes re-parsing its own ledger before this.
         """
-        h = self._hash({"name": name, **params})
-        for row in self:
-            if row["hash"] == h:
-                return h
-        row = {"hash": h, "name": name, "params": params, "note": note,
-               "at": datetime.now(timezone.utc).isoformat()}
-        with self.path.open("a") as f:
-            f.write(json.dumps(row, default=str) + "\n")
-        return h
+        size = self.path.stat().st_size if self.path.exists() else -1
+        if self._rows is None or size != self._size:
+            rows = []
+            if size >= 0:
+                with self.path.open() as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rows.append(json.loads(line))
+            self._rows, self._size = rows, size
+        return self._rows
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
-        if not self.path.exists():
-            return
-        with self.path.open() as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    yield json.loads(line)
+        return iter(list(self._scan()))
 
     def count(self) -> int:
         """Total distinct trials — the ``n_trials`` for ``stats.dsr`` and
         the ``n_cells`` for ``stats.expected_max_abs_t``."""
-        return sum(1 for _ in self)
+        return len(self._scan())
+
+    # ── writing ─────────────────────────────────────────────────────────────
+    def record(self, name: str, params: dict[str, Any], note: str = "",
+               metrics: dict[str, Any] | None = None) -> str:
+        """Append one evaluated cell. Returns its params-hash.
+
+        Re-recording an identical (name, params) pair is a no-op — running
+        the same cell twice is one trial, not two. ``metrics`` is free-form;
+        a numeric ``"sr"`` key (PER-PERIOD Sharpe) is what
+        ``sr_variance()`` reads.
+        """
+        h = self._hash({"name": name, **params})
+        rows = self._scan()
+        if any(r["hash"] == h for r in rows):
+            return h
+        row = {"hash": h, "name": name, "params": params, "note": note,
+               "metrics": dict(metrics) if metrics else {},
+               "at": datetime.now(timezone.utc).isoformat()}
+        with self.path.open("a") as f:
+            f.write(json.dumps(row, default=str) + "\n")
+        rows.append(row)
+        self._size = self.path.stat().st_size
+        return h
+
+    # ── what deflation needs ────────────────────────────────────────────────
+    def sharpes(self) -> list[float]:
+        """Recorded per-period Sharpes, in ledger order."""
+        out = []
+        for r in self._scan():
+            v = (r.get("metrics") or {}).get("sr")
+            if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                    and np.isfinite(v):
+                out.append(float(v))
+        return out
+
+    def sr_variance(self) -> float | None:
+        """Variance of per-period Sharpe ACROSS recorded trials — the
+        ``sr_variance`` argument of ``stats.dsr``.
+
+        Returns None when fewer than two trials carry an ``sr`` metric.
+        None propagates through ``dsr`` as None (unmeasured), which is the
+        point: a deflation computed against an invented spread is not a
+        deflation, and both of this library's own demos used to invent one.
+        """
+        srs = self.sharpes()
+        if len(srs) < 2:
+            return None
+        return float(np.var(srs, ddof=1))

@@ -9,12 +9,28 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # pandas is varied EXPLICITLY: the README claims 2.x and 3.x are both
+        # tested, and leaving that to pandas' own Python floor made the claim
+        # true only by accident — it would break silently the day pandas
+        # drops 3.11.
+        include:
+          - python-version: "3.10"
+            pandas: "pandas>=2.0,<3.0"
+          - python-version: "3.11"
+            pandas: "pandas>=2.0,<3.0"
+          - python-version: "3.11"
+            pandas: "pandas>=3.0"
+          - python-version: "3.12"
+            pandas: "pandas>=3.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e .[dev]
+      - run: pip install "${{ matrix.pandas }}"
+      - run: python -c "import pandas, numpy; print(pandas.__version__, numpy.__version__)"
       - run: pytest -q
+      - run: python -m nullbar nullbar/ --severity high

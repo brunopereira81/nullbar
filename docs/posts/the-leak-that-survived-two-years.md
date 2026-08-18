@@ -101,10 +101,11 @@ that the only version of this discipline that works is the one that runs as
 
 - **Pre-register** the design and the pass bar; freeze it in a hash.
 - **Count every trial** in an append-only ledger, because a best-of-64
-  search has a null max |t| of ~2.7 and human memory reports "just this one
-  idea".
+  search has a null max |t| of ~2.6 (higher on few clusters) and human
+  memory reports "just this one idea".
 - **Null-control first**: shuffled returns through the identical pipeline
-  must come back flat.
+  must come back indistinguishable from simply holding — not from zero, and
+  the difference matters on a drifting universe.
 - **Cluster inference** on time blocks (overlapping windows inflated
   another of our results by 1.9×).
 - **Bracket fills**: our resting bids filled 92–96% of the time, but the

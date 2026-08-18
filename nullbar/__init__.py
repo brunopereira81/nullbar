@@ -9,24 +9,35 @@ them, extracted.
 
 The workflow: register the design and the bar BEFORE running (registration),
 count every trial (ledger), deflate accordingly (stats), cluster your
-inference (evaluate), run the null control first (evaluate), price your
-fills honestly (fills), and let the prefix-replay check hunt your leaks
-(leaklint). The held-out test is one look.
+inference (evaluate), run the null control against the hold baseline
+(evaluate), price your fills honestly (fills), and let the prefix-replay
+check hunt your leaks (leaklint). The held-out test is one look.
+
+Named for the two things it makes you commit to before you are allowed to
+believe a number: the NULL control and the pre-registered BAR.
+(Released as ``prereg`` v0.1.0; renamed at v0.2.0 — the PyPI name ``prereg``
+belongs to an unrelated project.)
 """
 from .ledger import TrialLedger
-from .registration import AlreadySpentError, Registration
+from .registration import (AlreadySpentError, AmbiguousConditionError,
+                           Registration, SealBrokenError)
 from .stats import (clustered_t, dsr, expected_max_abs_t,
                     expected_max_sharpe, psr, sharpe)
-from .evaluate import block_cluster_eval, null_control, shuffle_within_columns
+from .evaluate import (block_cluster_eval, hold_baseline, null_control,
+                       null_verdict, shuffle_within_columns)
 from .fills import fill_bracket, through_mask, touch_mask
-from .leaklint import LintHit, lint_source, prefix_replay_check
+from .leaklint import (LeakError, LintHit, assert_no_leak, lint_source,
+                       prefix_replay_check)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
-    "TrialLedger", "Registration", "AlreadySpentError",
+    "TrialLedger", "Registration", "AlreadySpentError", "SealBrokenError",
+    "AmbiguousConditionError",
     "clustered_t", "sharpe", "psr", "dsr", "expected_max_sharpe",
     "expected_max_abs_t",
-    "block_cluster_eval", "null_control", "shuffle_within_columns",
+    "block_cluster_eval", "hold_baseline", "null_control", "null_verdict",
+    "shuffle_within_columns",
     "touch_mask", "through_mask", "fill_bracket",
-    "lint_source", "prefix_replay_check", "LintHit",
+    "lint_source", "prefix_replay_check", "assert_no_leak", "LintHit",
+    "LeakError",
 ]

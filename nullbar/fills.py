@@ -19,6 +19,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ._align import require_same_axes
+
 
 def touch_mask(limit: pd.DataFrame, low: pd.DataFrame,
                horizon: int = 1) -> pd.DataFrame:
@@ -27,8 +29,14 @@ def touch_mask(limit: pd.DataFrame, low: pd.DataFrame,
     ``limit`` is the resting price per (time x asset) — commonly the close
     of the signal bar. Strictly future periods only.
     """
-    future_min = low.shift(-1).rolling(horizon, min_periods=1).min().shift(
-        -(horizon - 1))
+    require_same_axes(limit=limit, low=low)
+    # Looking at the FUTURE low is the point here: a resting bid fills when
+    # the market comes to it AFTER the signal bar. Nothing about the
+    # DECISION uses it — which is exactly the judgement call the lint's
+    # escape hatch is for, and why it demands a reason.
+    nxt = low.shift(-1)                    # noqa: leak — fill, not signal
+    window_min = nxt.rolling(horizon, min_periods=1).min()
+    future_min = window_min.shift(-(horizon - 1))   # noqa: leak — as above
     return future_min <= limit
 
 
@@ -44,11 +52,18 @@ def fill_bracket(mask: pd.DataFrame, limit: pd.DataFrame, low: pd.DataFrame,
                  margin: float = 5e-4) -> dict:
     """Gross forward return of an entry mask under three fill assumptions.
 
+    All four frames must share exact axes — this function indexes them
+    against each other positionally, so a column reordering would report
+    another asset's returns for this asset's fills. (Measured: a swap of two
+    columns turned a true gross of 1.0 into 9.0, silently, in the module
+    whose whole job is to correct a 1.3–1.5x overstatement.)
+
     Returns per-assumption dicts of (n, gross) — the ratio
     ``touch.gross / assumed.gross`` is the honest haircut on every number
     the assumed-fills backtest produced.
     """
-    base = mask.fillna(False) & fwd.notna()
+    require_same_axes(mask=mask, limit=limit, low=low, fwd=fwd)
+    base = mask.fillna(False).astype(bool) & fwd.notna()
     t_m = base & touch_mask(limit, low, horizon).fillna(False)
     th_m = base & through_mask(limit, low, horizon, margin).fillna(False)
     out = {}

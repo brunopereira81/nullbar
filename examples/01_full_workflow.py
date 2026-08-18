@@ -1,12 +1,12 @@
 """The full honest workflow, end to end, on synthetic data.
 
-Run:  python examples/01_full_workflow.py
+Run:  python3 examples/01_full_workflow.py
 
 Story: we simulate 8 assets of hourly returns, plant a small real effect on
 a signal, then walk the exact sequence the library enforces:
 
-    register -> count trials -> null control -> clustered eval
-    -> fill bracket -> deflate -> spend the ONE test look -> verdict
+    register -> count trials (with their Sharpes) -> null control vs hold
+    -> clustered eval -> fill bracket -> deflate -> ONE test look -> verdict
 
 Everything prints; nothing here needs market data or an exchange.
 """
@@ -41,7 +41,7 @@ reg = nullbar.Registration(
     hypothesis="the demo signal predicts next-period returns",
     design={"entry_rate": 0.08, "hold": "1 bar", "cost_pct": 0.10},
     bar={
-        "null_flat": "null-control |t| < 3 on research window",
+        "null_flat": "null control indistinguishable from holding",
         "t3": "clustered t >= 3.0 on the TEST window",
         "net_positive": "gross - cost > 0 on the TEST window",
     },
@@ -49,24 +49,34 @@ reg = nullbar.Registration(
 reg_path = workdir / "demo-signal.json"
 print(f"registered: sha256 {reg.freeze(reg_path)[:16]}…  -> {reg_path}")
 
-# ── 2. every variant you try goes in the ledger ─────────────────────────────
+# ── 2. every variant you try goes in the ledger, WITH its Sharpe ────────────
+# the ledger is where deflation gets both of its numbers: how many cells you
+# searched, and how much their Sharpes varied. Record the metric and you
+# never have to invent the spread.
 ledger = nullbar.TrialLedger(workdir / "trials.jsonl")
-ledger.record("demo-signal", {"entry_rate": 0.08})
-# (imagine the 63 other variants you tried last month…)
-for th in (0.05, 0.10, 0.15):
-    ledger.record("demo-signal-rejected", {"entry_rate": th})
-print(f"trials on record: {ledger.count()}")
+for rate in (0.05, 0.08, 0.12, 0.15):
+    variant = pd.DataFrame(rng.random((n, k)) < rate, index=idx, columns=cols)
+    if rate == 0.08:
+        variant = signal                    # the one we registered
+    r = nullbar.block_cluster_eval(variant[research], fwd_real[research],
+                                   block="24h")
+    ledger.record("demo-signal", {"entry_rate": rate},
+                  metrics={"sr": r["t"] / np.sqrt(r["clusters"])})
+print(f"trials on record: {ledger.count()}  "
+      f"(sr spread across them: {ledger.sr_variance():.5f})")
 
-# ── 3. null control FIRST ───────────────────────────────────────────────────
-nulls = nullbar.null_control(signal[research], fwd_real[research],
-                            block="24h", seeds=(0, 1, 2))
-worst = max(abs(x["t"]) for x in nulls)
-print(f"null control: max |t| across seeds = {worst:.2f}  "
-      f"({'OK' if worst < 3 else 'PIPELINE BROKEN — stop here'})")
+# ── 3. null control FIRST — machinery check, before any real number ─────────
+nv = nullbar.null_verdict(signal[research], fwd_real[research],
+                          block="24h", seeds=(0, 1, 2))
+print(f"null control: scrambled runs reproduce their holdings' "
+      f"unconditional {nv['expected_gross']:+.3f}% and nothing more "
+      f"(max |t| {nv['max_abs_t_vs_expected']:.2f}) "
+      f"({'OK' if nv['ok'] else 'PIPELINE BROKEN — stop here'}); "
+      f"holding pays {nv['hold']['gross']:+.3f}%")
 
 # ── 4. the research-window number (free to look at) ─────────────────────────
 res = nullbar.block_cluster_eval(signal[research], fwd_real[research],
-                                block="24h")
+                                 block="24h")
 print(f"research window: {res['trades']} trades, {res['clusters']} clusters, "
       f"gross {res['gross']:+.3f}%, clustered t {res['t']:+.2f}")
 
@@ -75,29 +85,36 @@ close = 100 + pd.DataFrame(rng.normal(0, 0.4, (n, k)), index=idx,
                            columns=cols).cumsum()
 low = close - rng.uniform(0.0, 0.8, (n, k))
 bracket = nullbar.fill_bracket(signal[research], close[research],
-                              low[research], fwd_real[research])
+                               low[research], fwd_real[research])
 print("fill bracket:", {kk: f"{v['gross']:+.3f}% (n={v['n']})"
                         for kk, v in bracket.items()})
 
-# ── 6. deflate by what you searched ─────────────────────────────────────────
-per_trial_srs = rng.normal(0.0, 0.02, ledger.count())   # your sweep's SRs
-d = nullbar.dsr(observed_sr=0.03, n=res["clusters"],
-               n_trials=ledger.count(),
-               sr_variance=float(np.var(per_trial_srs)))
-print(f"deflated Sharpe probability (n_trials={ledger.count()}): {d:.3f}")
+# ── 6. deflate by what you actually searched ────────────────────────────────
+# the observed Sharpe must be in the SAME units as the recorded ones —
+# here per 24h block, which is t / sqrt(clusters) for both.
+observed_sr = res["t"] / np.sqrt(res["clusters"])
+d = nullbar.dsr(observed_sr=observed_sr, n=res["clusters"],
+                n_trials=ledger.count(),
+                sr_variance=ledger.sr_variance())
+luck = nullbar.expected_max_abs_t(ledger.count(), df=res["clusters"] - 1)
+print(f"deflated Sharpe probability (n_trials={ledger.count()}): {d:.3f}   "
+      f"| luck-of-{ledger.count()} threshold: |t| ~ {luck:.2f}")
 
 # ── 7. ONE test look, then the verdict against the frozen bar ───────────────
 test = nullbar.block_cluster_eval(signal[~research], fwd_real[~research],
-                                 block="24h")
+                                  block="24h")
 reg.spend_test_look(reg_path, results=test)
+# note: no bool() wrappers — numpy comparisons are graded correctly, and
+# anything that is not unambiguously true fails.
 verdict = reg.verdict({
-    "null_flat": worst < 3,
-    "t3": bool(test["t"] >= 3.0),
-    "net_positive": bool(test["gross"] - 0.10 > 0),
+    "null_flat": nv["ok"],
+    "t3": test["t"] >= 3.0,
+    "net_positive": test["gross"] - 0.10 > 0,
 })
 print(f"TEST: gross {test['gross']:+.3f}%, t {test['t']:+.2f}")
 print(f"VERDICT: {'PASS' if verdict['pass'] else 'FAIL'} "
-      f"(failed: {verdict['failed'] or 'none'})")
+      f"(failed: {verdict['failed'] or 'none'}, "
+      f"graded against the frozen file: {verdict['verified']})")
 
 # and the enforcement:
 try:
