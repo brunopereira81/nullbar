@@ -20,10 +20,10 @@ Here is the entire evaluation, run live against seven years of data, as seven
 printed lines:
 
 ```
-[1] registered: sha256 45e32c5cfa0135c7…
+[1] registered: sha256 8cb4e5e00dbb326e…
 [2] trials on record: 64  (sr spread across them: 0.0134)
 [3] null control: scrambled runs pay their holdings' unconditional +0.097%
-    and no more (max |t| 1.62)  (OK); holding all 8 pays +0.096%/24h
+    and no more (max |t| 1.02)  (OK); holding all 8 pays +0.096%/24h
 [4] OOS: 1815 trades, 560 clusters, gross +0.235%/trade,
     cluster mean +0.597%, clustered t +2.42   (luck-of-64: 2.61)
     2022 (the bear year): -0.616%
@@ -53,7 +53,7 @@ anything, and it is the line we got wrong twice. Scrambling each asset's
 returns and re-running the identical pipeline should reproduce exactly one
 thing: the unconditional return of the assets the rule holds, weighted the
 way it holds them — here **+0.097%**, against **+0.096%** for simply holding
-all eight. It reproduces that and nothing more (|t| 1.62). Version 1 of our
+all eight. It reproduces that and nothing more (|t| 1.02). Version 1 of our
 own library quoted the null's raw |t| against *zero*, which on a universe
 that drifted upward is a number about the drift, not about the pipeline.
 Version 2 then compared against an equal-weight buy-and-hold — and reported
