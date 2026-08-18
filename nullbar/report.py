@@ -89,7 +89,11 @@ def evidence(result: dict[str, Any] | None = None, *,
             if isinstance(leg, dict) and "gross" in leg:
                 out[f"{key}_gross"] = leg["gross"]
         assumed, touch = out.get("assumed_gross"), out.get("touch_gross")
-        if _finite(assumed) and _finite(touch) and float(assumed) != 0.0:
+        # only when the assumed leg is POSITIVE: "0.79x of the gross
+        # survived" is a sentence about a positive gross. Two negative legs
+        # divide to a healthy-looking 0.97, and a sign change divides to
+        # -2.39 — both read as haircuts and neither is one.
+        if _finite(assumed) and _finite(touch) and float(assumed) > 0.0:
             out["fill_haircut"] = float(touch) / float(assumed)
     if conditions:
         graded = {}
@@ -314,12 +318,28 @@ def _deflation(results: dict[str, Any], trials: dict[str, Any],
     where noise sits, not a threshold anything has to clear.
     """
     out: dict[str, Any] = {
-        "n_cells": None, "n_cells_source": None, "df": None,
-        "threshold_95": None, "median": None, "observed_abs_t": None,
-        "clears": None, "dsr": None, "dsr_source": None, "sr": None,
-        "sr_source": None, "sims": sims, "seed": seed,
+        "n_cells": None, "n_cells_source": None, "n_cells_note": None,
+        "df": None, "threshold_95": None, "median": None,
+        "observed_abs_t": None, "clears": None, "dsr": None,
+        "dsr_source": None, "sr": None, "sr_source": None, "sims": sims,
+        "seed": seed,
     }
-    if trials["count"] is not None:
+    # A recorded count wins over the ledger's row count, because |t| is
+    # two-sided: a signal tested long AND short is ONE cell, and only the
+    # researcher knows which rows pair up. It is also the one input a
+    # researcher could shrink to flatter themselves, so a recorded count
+    # BELOW the ledger's is disclosed rather than silently adopted.
+    recorded = results.get("n_cells")
+    if _finite(recorded) and int(recorded) >= 1:
+        out["n_cells"] = int(recorded)
+        out["n_cells_source"] = "recorded on the test look"
+        if trials["count"] is not None and int(recorded) < trials["count"]:
+            out["n_cells_note"] = (
+                f"the record claims {int(recorded)} cells against "
+                f"{trials['count']} ledger rows (two-sided pairing counts "
+                "one cell per signal tested in both directions); the "
+                "threshold below is the smaller, weaker deflation")
+    elif trials["count"] is not None:
         out["n_cells"], out["n_cells_source"] = int(trials["count"]), "ledger"
     elif budget is not None:
         out["n_cells"] = int(budget)

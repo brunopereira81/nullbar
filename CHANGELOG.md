@@ -42,6 +42,12 @@ someone who was not in the room.
 - **A `nullbar` console script** with two verbs, `report` and `lint`. Bare
   paths still lint, so `python3 -m nullbar strategy/` and `nullbar-lint` are
   unchanged.
+- **Two-sided cell counts.** `|t|` spans both tails, so a signal tested long
+  AND short is one cell, and only the researcher knows which ledger rows
+  pair up. An `n_cells` recorded on the test look therefore wins over the
+  ledger's row count — and because it is the one input a researcher could
+  shrink to flatter themselves, a recorded count BELOW the ledger's is
+  disclosed on the face of the report rather than silently adopted.
 
 ### Fixed
 
@@ -55,6 +61,13 @@ someone who was not in the room.
   line: the record had been wrong for two releases and no `print()` in any
   example showed it.
 
+- **The fill haircut is only a haircut when there is gross to cut.**
+  `touch / assumed` is now computed only for a positive assumed leg: two
+  negative legs divide to a healthy-looking 0.97 and a sign change divides
+  to -2.39, and both read as fractions that survived. Where the touch leg
+  goes negative the report says outright that resting-fill pricing leaves
+  no gross to haircut — which is what the flagship study's own record does.
+
 ### Notes
 
 - The report reads the record and never recomputes a result from market
@@ -66,7 +79,7 @@ someone who was not in the room.
   rather than rendered as a blank cell.
 - The report inherits the seal's limit and states it on its face: it is
   tamper-evident, not tamper-proof.
-- 163 tests (was 113). Every new behaviour mutation-checked: twelve
+- 170 tests (was 113). Every new behaviour mutation-checked: sixteen
   mutations, including "no test look reads as PASS", "the deflation quotes
   the expected maximum instead of the 5% line", and the name-shadowing bug
   itself — all caught.

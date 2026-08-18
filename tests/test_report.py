@@ -162,6 +162,28 @@ class TestDeflation:
         d = report_data(path, led)["deflation"]
         assert (d["n_cells"], d["n_cells_source"]) == (6, "ledger")
 
+    def test_a_recorded_cell_count_wins_over_the_ledger_rows(self, tmp_path):
+        # |t| is two-sided: 32 signal-direction pairs are 32 cells, not 64,
+        # and only the researcher knows which rows pair up.
+        path, led = _record(tmp_path, trials=8, results=nullbar.evidence(
+            FULL_RESULT, net=0.4, n_cells=4))
+        d = report_data(path, led, sims=20_000)["deflation"]
+        assert d["n_cells"] == 4
+        assert "recorded" in d["n_cells_source"]
+
+    def test_a_shrunken_cell_count_is_disclosed(self, tmp_path):
+        path, led = _record(tmp_path, trials=8, results=nullbar.evidence(
+            FULL_RESULT, net=0.4, n_cells=4))
+        page = nullbar.render_html(report_data(path, led, sims=20_000))
+        assert "4 cells against 8 ledger rows" in page
+
+    def test_a_cell_count_at_or_above_the_ledger_needs_no_disclosure(
+            self, tmp_path):
+        path, led = _record(tmp_path, trials=8, results=nullbar.evidence(
+            FULL_RESULT, net=0.4, n_cells=8))
+        d = report_data(path, led, sims=20_000)["deflation"]
+        assert d["n_cells"] == 8 and d["n_cells_note"] is None
+
     def test_degrees_of_freedom_come_from_the_clusters(self, tmp_path):
         path, led = _record(tmp_path)
         assert report_data(path, led)["deflation"]["df"] == \
@@ -246,6 +268,12 @@ class TestEvidence:
                                      "touch": {"n": 1, "gross": 1.0}})
         assert ev["fill_haircut"] == 0.5
 
+    def test_a_negative_assumed_gross_yields_no_haircut(self):
+        # two negative legs divide to a healthy-looking 0.97
+        ev = nullbar.evidence(fills={"assumed": {"n": 2, "gross": -2.0},
+                                     "touch": {"n": 1, "gross": -1.94}})
+        assert "fill_haircut" not in ev
+
     def test_a_zero_assumed_gross_yields_no_haircut(self):
         ev = nullbar.evidence(fills={"assumed": {"n": 2, "gross": 0.0},
                                      "touch": {"n": 1, "gross": 1.0}})
@@ -317,6 +345,15 @@ class TestRender:
             FULL_RESULT, net=0.4, private_note_metric=1.25))
         html = nullbar.render_html(report_data(path, led, sims=20_000))
         assert "private_note_metric" in html and "1.25" in html
+
+    def test_fills_that_turn_the_gross_negative_say_so(self, tmp_path):
+        path, led = _record(tmp_path, results=nullbar.evidence(
+            FULL_RESULT, net=0.4,
+            fills={"assumed": {"n": 100, "gross": 0.015},
+                   "touch": {"n": 90, "gross": -0.035},
+                   "through": {"n": 80, "gross": -0.064}}))
+        page = nullbar.render_html(report_data(path, led, sims=20_000))
+        assert "no gross left to haircut" in page
 
     def test_a_hostile_name_cannot_inject_markup(self, tmp_path):
         reg = nullbar.Registration(name="<script>alert(1)</script>",

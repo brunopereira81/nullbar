@@ -76,6 +76,11 @@ footer { margin-top:2.6rem; border-top:1px solid var(--rule);
 """
 
 
+def _is_num(value: Any) -> bool:
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value))
+
+
 def _esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
@@ -260,6 +265,14 @@ def render_html(data: dict[str, Any]) -> str:
         haircut = (data["metrics"] or {}).get("fill_haircut")
         if haircut is not None:
             body += _table([("Touch / assumed", haircut)])
+        legs = {k: (fills.get(k) or {}).get("gross")
+                for k in ("assumed", "touch")}
+        if _is_num(legs["touch"]) and legs["touch"] <= 0 \
+                and _is_num(legs["assumed"]) and legs["assumed"] > 0:
+            body += ('<p class="note"><strong>Under resting-fill pricing '
+                     "this record has no gross left to haircut: the touch "
+                     "leg is negative.</strong> The ratio above crosses "
+                     "zero and is not a fraction that survived.</p>")
         body += ('<p class="note">The entries that never fill are '
                  "disproportionately the good ones, so the assumed row is "
                  "an upper bound on what any of this could have executed "
@@ -280,7 +293,10 @@ def render_html(data: dict[str, Any]) -> str:
          clears if clears is not None else None),
         ("Deflated Sharpe probability", defl["dsr"]),
     ])
-    notes = ["Thresholds are simulated at report time from the recorded cell "
+    notes = []
+    if defl["n_cells_note"]:
+        notes.append(_esc(defl["n_cells_note"]).capitalize() + ".")
+    notes += ["Thresholds are simulated at report time from the recorded cell "
              f'and cluster counts ({defl["sims"]:,} draws, seed '
              f'{defl["seed"]}) &mdash; seeded, so they reproduce.']
     if defl["df"] is None and defl["n_cells"]:
