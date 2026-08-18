@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import __version__
 
-_VERBS = ("report", "lint")
+_VERBS = ("report", "anchor", "verify", "lint")
 
 
 def _report(argv: list[str]) -> int:
@@ -66,6 +66,56 @@ def _report(argv: list[str]) -> int:
     return 0 if verdict["status"] == "PASS" else 1
 
 
+def _anchor(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(
+        prog="nullbar anchor",
+        description="Record which commits carry a registration and its "
+                    "test-look stamp, so the order they were written in "
+                    "stops depending on the researcher's clock.")
+    ap.add_argument("registration")
+    ap.add_argument("--commit", action="store_true",
+                    help="commit these two paths first (never your staged "
+                         "work)")
+    ap.add_argument("-m", "--message", help="commit message for --commit")
+    args = ap.parse_args(argv)
+
+    from .anchor import GitError, anchor
+    try:
+        doc = anchor(args.registration, commit=args.commit,
+                     message=args.message)
+    except FileNotFoundError as exc:
+        print(f"nullbar anchor: {exc}", file=sys.stderr)
+        return 2
+    except GitError as exc:
+        print(f"nullbar anchor: {exc}", file=sys.stderr)
+        return 2
+    for role, entry in doc["entries"].items():
+        print(f"{role}: {entry['commit'][:12]} {entry['path']}")
+    print(f"anchor written to "
+          f"{Path(args.registration).with_suffix('.anchor.json')}")
+    return 0
+
+
+def _verify(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(
+        prog="nullbar verify",
+        description="Check a recorded anchor against the repository now.")
+    ap.add_argument("registration")
+    args = ap.parse_args(argv)
+
+    from .anchor import verify_anchor
+    result = verify_anchor(args.registration)
+    print(f"anchor: {result['status']}"
+          + ("" if result["witnessed"] else "  (local only)"))
+    for finding in result["findings"]:
+        print(f"  ! {finding}", file=sys.stderr)
+    for note in result["notes"]:
+        print(f"  - {note}")
+    # anything but an intact anchor exits non-zero: "not anchored" and
+    # "anchor holds" must not be the same answer to a CI job.
+    return 0 if result["status"] == "intact" else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in ("-V", "--version"):
@@ -73,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if argv and argv[0] == "report":
         return _report(argv[1:])
+    if argv and argv[0] == "anchor":
+        return _anchor(argv[1:])
+    if argv and argv[0] == "verify":
+        return _verify(argv[1:])
     from .leaklint import main as lint_main
     if argv and argv[0] == "lint":
         return lint_main(argv[1:])

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .anchor import verify_anchor
 from .ledger import TrialLedger
 from .registration import (BarMismatchError, Registration, _condition_state,
                            spec_text)
@@ -243,7 +244,22 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
         gaps.append("the record does not carry a grade for: "
                     + ", ".join(verdict["missing"]))
 
-    status = _status(verdict, stamp, mismatch)
+    # the anchor: whether anything outside this machine attests to when the
+    # bar was set. A broken one is not a footnote — the committed bytes and
+    # the graded bytes disagreeing is the same class of fact as a bar that
+    # contradicts its own grading, and reads as CONTRADICTED for the same
+    # reason.
+    anchor = verify_anchor(path)
+    findings.extend(anchor["findings"])
+    if anchor["status"] == "unanchored":
+        gaps.append("the record is not anchored: nothing outside this "
+                    "machine attests that the bar was frozen before the "
+                    "result existed (nullbar anchor)")
+    elif anchor["status"] == "unverifiable":
+        gaps.append("the recorded anchor could not be checked here")
+
+    status = _status(verdict, stamp, mismatch,
+                     anchor_broken=anchor["status"] == "broken")
 
     data: dict[str, Any] = {
         "nullbar_version": __version__,
@@ -271,6 +287,7 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
                     if k not in SECTION_KEYS},
         "verdict": {**verdict, "rows": bar_rows, "status": status,
                     "mismatch": mismatch},
+        "anchor": anchor,
         "findings": findings,
     }
     data["deflation"] = _deflation(results, trials, budget, gaps,
@@ -289,14 +306,14 @@ def _before(a: Any, b: Any) -> bool:
 
 
 def _status(verdict: dict[str, Any], stamp: dict[str, Any] | None,
-            mismatch: str | None) -> str:
+            mismatch: str | None, *, anchor_broken: bool = False) -> str:
     """PASS / FAIL / INCOMPLETE / CONTRADICTED — never a bare boolean.
 
     INCOMPLETE exists because "the record does not say" and "the strategy
     failed" are different answers, and collapsing them is how an unfinished
     record reads as a result.
     """
-    if mismatch is not None:
+    if mismatch is not None or anchor_broken:
         return "CONTRADICTED"
     if stamp is None:
         return "INCOMPLETE"

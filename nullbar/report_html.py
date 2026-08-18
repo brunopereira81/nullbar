@@ -139,6 +139,60 @@ def _missing(what: str) -> str:
             "was found.</p>")
 
 
+_ANCHOR_LIMIT = (
+    '<p class="note">What a git anchor proves: that the bytes committed are '
+    "the bytes graded, that the registration commit precedes the test-look "
+    "commit, and that both are still reachable from HEAD. What it does NOT "
+    "prove: <strong>wall-clock time</strong> &mdash; commit dates are "
+    "self-reported and one environment variable forges them, so only a push "
+    "to a host the researcher does not control was witnessed by anyone "
+    "else. It also cannot show that the researcher had not already seen the "
+    "test window: ordering of documents is not ordering of knowledge.</p>")
+
+
+def _anchor_body(anchor: dict[str, Any]) -> str:
+    """The anchoring section. An absent anchor says what is absent."""
+    status = anchor["status"]
+    if status == "unanchored":
+        return (_missing("this record is not anchored to any commit")
+                + '<p class="note">Without one, every timestamp here is the '
+                  "researcher's own clock: a study run first and registered "
+                  "afterwards produces this same page. <code>nullbar anchor "
+                  "&lt;registration&gt;</code> records which commits carry "
+                  "the registration and the stamp.</p>")
+    rows = []
+    for role, e in anchor["entries"].items():
+        remotes = ", ".join(e["remotes"]) if e["remotes"] else "none"
+        rows.append(
+            f'<tr><td>{_esc(role)}</td><td class="mono">'
+            f'{_esc(e["commit"][:12])}</td>'
+            f'<td class="note">{_esc(e["committed_at"])}</td>'
+            f'<td class="note">{_esc(remotes)}</td>'
+            f'<td><span class="tag t-{"pass" if e["present"] and e["in_history"] else "fail"}">'
+            f'{"IN HISTORY" if e["present"] and e["in_history"] else "BROKEN"}'
+            "</span></td></tr>")
+    body = ("<table><tr><th>What</th><th>Commit</th><th>Committed (self-"
+            "reported)</th><th>Seen by remote</th><th></th></tr>"
+            + "".join(rows) + "</table>")
+    ordering = anchor["ordering"]
+    if ordering:
+        body += _table([
+            ("Registration and test look in different commits",
+             ordering["distinct"]),
+            ("Registration commit precedes the test look",
+             ordering["precedes"])])
+    if not anchor["witnessed"]:
+        body += ('<p class="note"><strong>Local only.</strong> No remote '
+                 "branch contains these commits, so nothing outside this "
+                 "machine has seen them and the whole history could be "
+                 "rebuilt in a minute.</p>")
+    for note in anchor["notes"]:
+        if "outside this machine" in note:
+            continue                    # said above, in bold, once
+        body += f'<p class="note">{_esc(note)}</p>'
+    return body + _ANCHOR_LIMIT
+
+
 def render_html(data: dict[str, Any]) -> str:
     """The full artifact. Input is ``report.report_data`` output."""
     reg, seal = data["registration"], data["seal"]
@@ -343,7 +397,10 @@ def render_html(data: dict[str, Any]) -> str:
                "prevent.</p>")
     parts.append(_section(7, "The bar, as graded", body))
 
-    # 8 — everything else that was recorded
+    # 8 — the anchor
+    parts.append(_section(8, "Anchoring", _anchor_body(data["anchor"])))
+
+    # 9 — everything else that was recorded
     extra = {k: v for k, v in (data["metrics"] or {}).items()
              if k not in ("trades", "clusters", "gross", "cluster_mean", "t",
                           "per_year")}
@@ -354,11 +411,11 @@ def render_html(data: dict[str, Any]) -> str:
         body += ('<p class="note">Every remaining top-level entry of the '
                  "test-look payload, so nothing recorded is hidden by this "
                  "rendering.</p>")
-        parts.append(_section(8, "The rest of the record", body))
+        parts.append(_section(9, "The rest of the record", body))
 
-    # 9 — what is missing
+    # 10 — what is missing
     if data["gaps"]:
-        parts.append(_section(9, "What this record does not contain",
+        parts.append(_section(10, "What this record does not contain",
                               "<ul>" + "".join(f"<li>{_esc(g)}</li>"
                                                for g in data["gaps"])
                               + "</ul>"))

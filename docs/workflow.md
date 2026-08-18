@@ -214,6 +214,53 @@ tamper-proof. It binds the look to the registration by hash and says so on
 its face, but a reader who must not trust the researcher needs the frozen
 file and the stamp anchored somewhere the researcher does not control.
 
+## 8. Anchor it, if someone else has to believe you
+
+```bash
+nullbar anchor experiments/my_exp.json --commit    # BEFORE you run
+# ... the study runs, the look is spent ...
+nullbar anchor experiments/my_exp.json --commit    # after
+nullbar verify experiments/my_exp.json             # exit 1 if it does not hold
+```
+
+Steps 1–7 are enforced by your own discipline and your own clock. Every
+timestamp in the record is written by you, so a study run first and
+registered afterwards — with a bar chosen to fit the answer it already
+knows — produces a flawless report and an intact seal. That is the hole
+anchoring closes.
+
+Anchor the registration **before** you run and the stamp **after**, and the
+registration's commit is an ancestor of the stamp's. Changing that order
+means rewriting history, which changes every descendant hash and, once
+pushed, is a force-push someone else's server saw. `verify` checks four
+things: the committed bytes are the bytes being graded, the registration
+commit precedes the test-look commit, both are still reachable from HEAD,
+and whether any remote-tracking ref contains them. The report renders all
+four, and a broken anchor makes the verdict `CONTRADICTED` — the committed
+record and the graded record disagreeing is the same class of fact as a bar
+that contradicts its own grading.
+
+Read the limits as carefully as the guarantees:
+
+- **It does not prove wall-clock time.** Commit dates are self-reported and
+  `GIT_COMMITTER_DATE` forges them in one environment variable. Only a push
+  to a host you do not control was witnessed by anyone else — and by a log
+  nobody can audit. For time itself, anchor the hash with an RFC-3161
+  timestamp or a transparency log; git is the cheapest option, not the
+  strongest.
+- **A local-only repository proves nothing to a third party.** Rewind far
+  enough and the anchor record reverts with everything else, leaving
+  nothing to disagree with. The report says "local only" out loud when no
+  remote has seen the commits, and there is a test pinning exactly this
+  blind spot rather than papering over it.
+- **It cannot show you had not already seen the test window.** Ordering of
+  documents is not ordering of knowledge. Nothing short of somebody else
+  holding the held-out data fixes that one — which is a custody
+  arrangement, not a library.
+
+Both commits also carry the anchor record itself (`*.anchor.json`), because
+untracked it would be invisible to the clone a reader actually checks.
+
 ---
 
 ### The deflation cheat sheet

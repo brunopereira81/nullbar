@@ -2,6 +2,59 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.6.0] — 2026-08-18
+
+Git anchoring. Steps 1–7 are enforced by your own discipline and your own
+clock, which means a study run first and registered afterwards — with a bar
+chosen to fit the answer it already knows — produces a flawless report and
+an intact seal. This release closes the half of that gap a repository can.
+
+### Added
+
+- **`nullbar anchor <registration.json> [--commit]`** — records which
+  commits carry the registration and its test-look stamp into
+  `<registration>.anchor.json`. Anchor before you run and again after, and
+  the registration's commit is an ancestor of the stamp's; changing that
+  order means rewriting history, which changes every descendant hash and,
+  once pushed, is a force-push someone else's server saw. Without
+  `--commit` it records history rather than making any — a tool that
+  commits on your behalf gets to decide what "the record" contains. With
+  it, it commits exactly those paths (never your staged work, never
+  `--amend`), then commits the anchor record in a following commit, since
+  untracked it would be invisible to the clone a reader actually checks.
+- **`nullbar verify <registration.json>`** — checks four things against the
+  repository now: the committed bytes are the bytes being graded, the
+  registration commit precedes the test-look commit, both are still
+  reachable from HEAD, and whether any remote-tracking ref contains them.
+  Exits non-zero for anything but `intact`, because "not anchored" and
+  "anchor holds" must not be the same answer to a CI job. Verification
+  resolves the repository from the file it is handed, not from the absolute
+  path recorded at anchor time, so a third party clones wherever they like
+  and it still checks.
+- **The report renders the anchor** as its own section, and a broken anchor
+  makes the verdict `CONTRADICTED`: the committed record and the graded
+  record disagreeing is the same class of fact as a bar that contradicts its
+  own grading. An unanchored record is named as a gap.
+
+### Notes
+
+- The section states its own limits on the page. A git anchor does **not**
+  prove wall-clock time — commit dates are self-reported and
+  `GIT_COMMITTER_DATE` forges them in one environment variable, so only a
+  push to a host the researcher does not control was witnessed, and by a log
+  nobody can audit. It does not prove the researcher had not already seen
+  the test window: ordering of documents is not ordering of knowledge. And a
+  local-only repository proves nothing at all — rewind far enough and the
+  anchor record reverts with everything else, leaving nothing to disagree
+  with. `tests/test_anchor.py` pins that blind spot with a passing test
+  rather than papering over it, and the report says "local only" out loud.
+- For time itself, the next rungs are an RFC-3161 timestamp or a
+  transparency log; git is the cheapest option, not the strongest.
+- 198 tests (was 170), driving a real repository through subprocess rather
+  than a mock of git — the claim here is about what git does to history when
+  someone rewrites it. Nine mutations checked, all caught, including
+  "ancestry never checked" and "remote-tracking refs never consulted".
+
 ## [0.5.0] — 2026-08-18
 
 The report. A registration, its ledger and its test-look stamp are three

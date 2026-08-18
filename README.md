@@ -40,6 +40,7 @@ previously consumed months and produced numbers we later had to retract.
 | `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
 | `fills` | Touch/through fill brackets for resting bids and asks | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
 | `leaklint` | Static lookahead lint (CLI) + **prefix-replay check** (sound one way: it cannot see a leak baked into a constant fitted outside the callable) | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
+| `anchor` | Git anchoring: which commits carry the registration and the stamp, whether the first precedes the second, and whether anyone outside this machine ever saw them | Timestamps a researcher writes with their own clock, in a record whose whole claim is that the bar came first |
 | `report` | The whole record — registration, hash, ledger, null, result, fills, deflation, test look, graded bar — as one self-contained HTML page | Results that lived as `print()` calls, so what was promised and what was measured were never in the same artifact |
 
 The prefix-replay check deserves a sentence: recompute any feature on a data
@@ -66,6 +67,10 @@ nullbar lint strategy/            # or: python3 -m nullbar strategy/
 
 # render a finished registration as one self-contained report:
 nullbar report experiments/mr24.json --ledger experiments/trials.jsonl
+
+# anchor the record in git — before the run, and again after:
+nullbar anchor experiments/mr24.json --commit
+nullbar verify experiments/mr24.json
 ```
 
 Requires Python 3.10+; numpy and pandas (2.x and 3.x are separate CI legs).
@@ -134,8 +139,16 @@ of compute instead of capital.
 It is also tamper-**evident**, not tamper-proof: it grades the frozen file
 and binds the test-look stamp to that file's hash, but anyone with write
 access can delete both. It is built for a researcher keeping themselves
-honest. If a third party has to believe the record, commit it — or anchor it
-somewhere you don't control.
+honest.
+
+`nullbar anchor` closes the half of that a repository can. Anchor the
+registration before you run and the stamp after, and git holds the ordering:
+the bar's commit is an ancestor of the result's, and changing that means
+rewriting history that a push has already shown someone else. It still does
+not prove wall-clock time — commit dates are self-reported — nor that you
+had not already seen the test window. For those, anchor the hash with an
+RFC-3161 timestamp or a transparency log, and have somebody else hold the
+data.
 
 ## Docs & examples
 
@@ -150,16 +163,17 @@ somewhere you don't control.
 - **[A finished report](docs/sample-report.html)** —
   [rendered](https://htmlpreview.github.io/?https://raw.githubusercontent.com/brunopereira81/nullbar/master/docs/sample-report.html).
   Our own best strategy, seven years of real hourly bars, 32 two-sided cells
-  of search, graded against a bar frozen before the test window was touched:
+  of search, the bar committed to git before the run and the result after:
   **FAIL** on three of four conditions. That is what the artifact looks like
-  when the answer is no.
+  when the answer is no — including the anchor's own caveat, that a
+  local-only repository was witnessed by nobody.
 - **[The leak that survived two years](docs/posts/the-leak-that-survived-two-years.md)**
   — the full story.
 - **[CHANGELOG](CHANGELOG.md)** — what moved, and why.
 
 ## Status
 
-`v0.5.0` — extracted 2026-08-12 from a live production system
+`v0.6.0` — extracted 2026-08-12 from a live production system
 (Coinbase spot, TimescaleDB, 2,100+ tests), then put through three
 independent audit passes. Every finding is fixed, each one mutation-checked
 against a test that fails when the bug is restored; the full list is in the
