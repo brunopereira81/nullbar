@@ -33,6 +33,23 @@ and left four residuals plus two redundant file reads. All are closed here.
   moving the correct way for each. The second positional parameter is
   renamed `low` -> `extreme` accordingly.
 
+### Fixed — deflation, from a re-read of the FIRST audit
+
+Its F6 had three parts and only part (a), the cheat sheet disagreeing with
+its own function, was ever acted on.
+
+- **The expected maximum is not a bar.** Pure noise beats its own E[max|t|]
+  about 45% of the time (measured: 45.4% over best-of-64), so quoting it as
+  the threshold to clear is materially too lenient. A level noise reaches 5%
+  of the time is the 95th percentile of max|t| — 3.35 at 64 cells against
+  2.60 for the mean. The cheat sheet now carries both columns, the docs and
+  docstrings say to set bars from the tail, and the docs-vs-function test
+  checks both columns.
+- **|t| is two-sided, so direction pairs are one cell.** A signal tested
+  long AND short is one two-sided cell, not two: 16 signals x 2 horizons x 2
+  directions is 32 cells, not 64. Documented, and applied in the walkthrough
+  and the launch post.
+
 ### Internal
 
 - `verdict()` read the frozen registration twice (once to grade, once for

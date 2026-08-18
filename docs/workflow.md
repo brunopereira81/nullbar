@@ -79,9 +79,9 @@ deflation the bar was set against no longer applies.
 Every variant you evaluate — including the ones you abandon after one look —
 goes in. The ledger is append-only with no delete API, because the count it
 holds is the one number human memory reliably shrinks. A best-of-64 search
-has an expected max |t| of ~2.6 under pure noise
-(`nullbar.expected_max_abs_t(64)`); if you don't know your 64, your t of 2.6
-reads as a discovery.
+of pure noise reaches |t| >= 3.35 five percent of the time
+(`nullbar.expected_max_abs_t(64, summary=0.95)`); if you don't know your 64,
+your t of 2.6 reads as a discovery.
 
 Record `metrics={"sr": ...}` and `ledger.sr_variance()` gives you the other
 number deflation needs, instead of inventing one at step 5.

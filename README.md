@@ -35,7 +35,7 @@ previously consumed months and produced numbers we later had to retract.
 | Module | What it does | The bug it exists because of |
 |---|---|---|
 | `registration` | Freeze design + pass bar before results; **one** test look, enforced; verdicts graded fail-closed against the file on disk | "One more epoch, one more threshold" after seeing test data |
-| `ledger` | Append-only trial count with per-trial metrics (no delete API) | A t=2.68 celebrated against a best-of-64 noise threshold of ~2.6 |
+| `ledger` | Append-only trial count with per-trial metrics (no delete API) | A t=2.68 celebrated, when a best-of-64 noise search clears 3.35 five percent of the time |
 | `stats` | Clustered t, PSR/DSR in strictly per-period units; `dsr` returns `None`, never 0, when the trial count or the spread is unknown | Overlapping windows inflating results 1.9×; a gate that logged PSR=0.000 for months because annualized and per-period units were mixed |
 | `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
 | `fills` | Touch/through fill brackets for resting bids and asks | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |

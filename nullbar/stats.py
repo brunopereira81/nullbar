@@ -12,8 +12,10 @@ in production somewhere:
 - ``dsr`` REFUSES to run with an unknown trial count or an unknown spread
   instead of returning 0.0 — "unmeasured" and "zero" must never share a
   value.
-- ``expected_max_abs_t``: a best-of-64 parameter search has a null max |t|
-  of ~2.6; a t of 2.68 read as "almost significant" is exactly noise.
+- ``expected_max_abs_t``: a best-of-64 parameter search reaches |t| >= 3.35
+  by luck alone 5% of the time, so a t of 2.68 read as "almost significant"
+  is exactly noise. Its EXPECTED maximum, 2.6, is not a bar — noise clears
+  that ~45% of the time.
 
 Note on deflation and independence: ``expected_max_sharpe`` and
 ``expected_max_abs_t`` both assume INDEPENDENT trials. Real sweeps are
