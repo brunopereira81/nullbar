@@ -38,7 +38,7 @@ previously consumed months and produced numbers we later had to retract.
 | `ledger` | Append-only trial count with per-trial metrics (no delete API) | A t=2.68 celebrated against a best-of-64 noise threshold of ~2.6 |
 | `stats` | Clustered t, PSR/DSR in strictly per-period units; `dsr` returns `None`, never 0, when the trial count or the spread is unknown | Overlapping windows inflating results 1.9×; a gate that logged PSR=0.000 for months because annualized and per-period units were mixed |
 | `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
-| `fills` | Touch/through fill brackets for resting orders | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
+| `fills` | Touch/through fill brackets for resting bids and asks | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
 | `leaklint` | Static lookahead lint (CLI) + **prefix-replay check** (sound one way: it cannot see a leak baked into a constant fitted outside the callable) | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
 
 The prefix-replay check deserves a sentence: recompute any feature on a data
@@ -136,9 +136,9 @@ somewhere you don't control.
 
 ## Status
 
-`v0.3.0` — extracted 2026-08-12 from a live production system
+`v0.4.0` — extracted 2026-08-12 from a live production system
 (Coinbase spot, TimescaleDB, 2,100+ tests), renamed and hardened 2026-08-18
-against two independent audits, 27 findings between them. The ones worth
+across three independent audit passes, 27 distinct findings. The ones worth
 knowing: `verdict()` could grade a failing strategy as PASS, `fill_bracket`
 could overstate 9× on misaligned axes, `clustered_t` inflated t when a
 cluster held no finite observation, and the frozen bar could say something

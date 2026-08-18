@@ -2,6 +2,42 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.4.0] — 2026-08-18
+
+A third audit pass, run against 0.3.0, confirmed every earlier finding fixed
+and left four residuals plus two redundant file reads. All are closed here.
+
+### Fixed
+
+- **`expected_max_abs_t` returned a threshold nothing could pass at low
+  `df`.** The t tails own the MEAN of max|t| when the cell count is small —
+  16 cells read 6.97 at `df=2` against 2.08 for the normal — and
+  `clustered_t` permits three clusters, so a user could legitimately land
+  there. The mean is now refused below `df=5`, with `summary="median"` (or
+  any quantile in (0, 1)) available for anyone who needs a number there and
+  is willing to say which number it is. Every published value is unchanged:
+  the refusal only covers a region the docs never quoted.
+- **The lint no longer flags prose.** `msg = "never use .shift(-1) here"`
+  was a hit. Matches are now discarded when they lie ENTIRELY inside a
+  string literal, which keeps the other half of the same bug fixed —
+  `df["col#1"].shift(-1)` is still caught, and so are the patterns that
+  match a string ARGUMENT on purpose (`merge_asof(direction="forward")`,
+  `fillna(method="bfill")`). Blanking the literals outright, the obvious
+  fix, silently disables those two.
+- **A missing path is an error message, not a traceback.**
+  `lint_source` raises a plain `FileNotFoundError("no such file or
+  directory: …")` and the CLI prints it and exits 2.
+- **Resting ASKS are modelled.** `touch_mask`, `through_mask` and
+  `fill_bracket` take `side="buy"` (default, a bid measured against the LOW
+  frame) or `side="sell"` (an ask against the HIGH), with the through-margin
+  moving the correct way for each. The second positional parameter is
+  renamed `low` -> `extreme` accordingly.
+
+### Internal
+
+- `verdict()` read the frozen registration twice (once to grade, once for
+  the seal status) and `lint_source` read every file twice. Both read once.
+
 ## [0.3.0] — 2026-08-18
 
 The remaining findings from the first audit (F1–F20, 2026-08-17); v0.2.0

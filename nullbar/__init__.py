@@ -30,7 +30,7 @@ from .fills import fill_bracket, through_mask, touch_mask
 from .leaklint import (LeakError, LintHit, assert_no_leak, lint_source,
                        prefix_replay_check)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "TrialLedger", "Registration", "AlreadySpentError", "SealBrokenError",
     "AmbiguousConditionError", "BarMismatchError", "spec_text",

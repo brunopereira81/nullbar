@@ -134,6 +134,9 @@ between, and only live resting orders narrow it. All four frames must share
 exact axes and the function refuses otherwise — a column reordering here
 turned a true gross of 1.0 into 9.0 in testing, silently.
 
+Both sides are modelled: `side="buy"` is a resting bid, measured against the
+LOW frame; `side="sell"` a resting ask, measured against the HIGH.
+
 ## 6. One test look, then the verdict
 
 ```python
@@ -173,7 +176,10 @@ raises rather than being guessed at.
 | 64 cells | 2.60 | 2.90 | almost none |
 
 Column 2 is `nullbar.expected_max_abs_t(k)` — simulated, seeded, and the
-large-sample (normal) limit. Column 3 is `expected_max_abs_t(k, df=20)`:
+large-sample (normal) limit. Below `df=5` (six clusters) the MEAN of max|t|
+is refused: the t tails own it and the answer stops being a threshold
+anything could pass. Ask for `summary="median"` and say so, or get more
+clusters. Column 3 is `expected_max_abs_t(k, df=20)`:
 a cluster-level t computed on 21 clusters has fatter tails, so the luck
 threshold is **higher**. Pass `df=n_clusters - 1`; the normal column is a
 lower bound and errs in the flattering direction. Both assume INDEPENDENT

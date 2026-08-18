@@ -75,26 +75,40 @@ class LintHit:
 
 
 # ── static lint ─────────────────────────────────────────────────────────────
-def _scannable_lines(src: str) -> list[str]:
-    """Source with comments and multi-line strings blanked out.
+def _line_masks(src: str) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Per line: the code with comments stripped, plus the column spans
+    covered by string literals.
 
-    Not ``line.split("#")[0]``: that truncates at a ``#`` inside a string
-    literal, so ``label = "close # then"; x = df.shift(-1)`` went unflagged
-    — a false NEGATIVE in a leak detector. Tokenizing knows the difference.
-    Docstrings are blanked because prose about ``shift(-1)`` is not code.
+    Not ``line.split("#")[0]``: that truncates at a ``#`` inside a string,
+    so ``label = "close # then"; x = df.shift(-1)`` went unflagged — a
+    false NEGATIVE in a leak detector. And not blanking the strings either:
+    the patterns for ``merge_asof(direction="forward")`` and
+    ``fillna(method="bfill")`` match a string ARGUMENT on purpose. Spans let
+    a caller drop the matches that lie ENTIRELY inside a literal — prose in
+    a docstring or a message — and keep everything else.
     """
     lines = src.splitlines()
-    out = list(lines)
+    code = list(lines)
+    spans: list[list[tuple[int, int]]] = [[] for _ in lines]
+    kinds = {tokenize.STRING}
+    for name in ("FSTRING_MIDDLE",):          # py3.12+ splits f-strings up
+        if hasattr(tokenize, name):
+            kinds.add(getattr(tokenize, name))
     try:
         for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            row, col = tok.start
             if tok.type == tokenize.COMMENT:
-                out[tok.start[0] - 1] = out[tok.start[0] - 1][:tok.start[1]]
-            elif tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
-                for ln in range(tok.start[0], tok.end[0] + 1):
-                    out[ln - 1] = ""
+                code[row - 1] = code[row - 1][:col]
+            elif tok.type in kinds:
+                if tok.end[0] > row:                       # spans lines
+                    spans[row - 1].append((col, len(lines[row - 1])))
+                    for ln in range(row + 1, tok.end[0] + 1):
+                        spans[ln - 1].append((0, len(lines[ln - 1])))
+                else:
+                    spans[row - 1].append((col, tok.end[1]))
     except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
-        return [ln.split("#", 1)[0] for ln in lines]
-    return out
+        return [(ln.split("#", 1)[0], []) for ln in lines]
+    return list(zip(code, spans))
 
 
 def iter_python_files(paths: Iterable[str | Path]) -> list[Path]:
@@ -105,8 +119,10 @@ def iter_python_files(paths: Iterable[str | Path]) -> list[Path]:
         if p.is_dir():
             out.extend(sorted(f for f in p.rglob("*.py")
                               if not _SKIP_DIRS & set(f.parts)))
-        else:
+        elif p.exists():
             out.append(p)
+        else:
+            raise FileNotFoundError(f"no such file or directory: {p}")
     return out
 
 
@@ -119,14 +135,19 @@ def lint_source(paths: Sequence[str | Path]) -> list[LintHit]:
     """
     hits: list[LintHit] = []
     for p in iter_python_files(paths):
-        raw = p.read_text().splitlines()
-        for i, code in enumerate(_scannable_lines(p.read_text()), start=1):
+        src = p.read_text()
+        raw = src.splitlines()
+        for i, (code, spans) in enumerate(_line_masks(src), start=1):
             if not code.strip() or _SUPPRESS.search(raw[i - 1]):
                 continue
             for pat, msg, sev in _PATTERNS:
-                if re.search(pat, code):
-                    hits.append(LintHit(str(p), i, sev, pat, msg,
-                                        raw[i - 1].strip()))
+                for m in re.finditer(pat, code):
+                    inside = any(a <= m.start() and m.end() <= b
+                                 for a, b in spans)
+                    if not inside:            # prose in a string is not code
+                        hits.append(LintHit(str(p), i, sev, pat, msg,
+                                            raw[i - 1].strip()))
+                        break
     return hits
 
 
@@ -279,7 +300,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
     order = {"high": 3, "medium": 2, "review": 1}
     floor = order[args.severity]
-    hits = [h for h in lint_source(args.paths) if order[h.severity] >= floor]
+    try:
+        hits = [h for h in lint_source(args.paths) if order[h.severity] >= floor]
+    except OSError as e:                      # a traceback is not a CLI error
+        print(f"nullbar-lint: {e}", file=sys.stderr)
+        return 2
     for h in hits:
         print(f"{h.path}:{h.line}: [{h.severity}] {h.message}\n    {h.text}")
     print(f"{len(hits)} hit(s) — each needs a human eye, "

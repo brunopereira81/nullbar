@@ -194,15 +194,20 @@ class Registration:
             return Path(reg_path)
         return self.path
 
-    def _frozen_doc(self, p: Path) -> dict[str, Any]:
+    def _read(self, p: Path) -> tuple[str, str]:
+        """(text, sha256) of the frozen file — one read per verdict."""
+        text = p.read_text()
+        return text, hashlib.sha256(text.encode()).hexdigest()
+
+    def _frozen_doc(self, p: Path,
+                    known: tuple[str, str] | None = None) -> dict[str, Any]:
         """Read the registration from disk and refuse to proceed if it
         disagrees with the object in memory."""
-        if not p.exists():
+        if known is None and not p.exists():
             raise SealBrokenError(
                 f"{p} does not exist — a registration that has been deleted "
                 "grades nothing; re-freeze under a new name and say so")
-        text = p.read_text()
-        on_disk = hashlib.sha256(text.encode()).hexdigest()
+        text, on_disk = known if known is not None else self._read(p)
         in_memory = hashlib.sha256(self._payload().encode()).hexdigest()
         if on_disk != in_memory and \
                 self._promise(json.loads(text)) != self._promise(self.doc):
@@ -216,7 +221,8 @@ class Registration:
     def _stamp_path(self, reg_path: str | Path) -> Path:
         return Path(reg_path).with_suffix(".test_look.json")
 
-    def seal_status(self, reg_path: str | Path | None = None) -> dict:
+    def seal_status(self, reg_path: str | Path | None = None,
+                    known: tuple[str, str] | None = None) -> dict:
         """Everything a reader needs to judge whether the seal held.
 
         ``matches`` is False (never an exception) so this can be called on a
@@ -229,8 +235,8 @@ class Registration:
                                "test_look_spent": False, "stamp_bound": False}
         if not out["frozen"]:
             return out
-        text = p.read_text()
-        out["sha256"] = hashlib.sha256(text.encode()).hexdigest()
+        out["sha256"] = (known[1] if known is not None
+                         else self._read(p)[1])
         out["matches"] = out["sha256"] == hashlib.sha256(
             self._payload().encode()).hexdigest()
         stamp = self._stamp_path(p)
@@ -313,8 +319,12 @@ class Registration:
         cannot lower it. ``verified`` says which happened.
         """
         p = self._resolve_path(reg_path)
+        known = None
         if p is not None:
-            doc = self._frozen_doc(p)
+            if not p.exists():
+                self._frozen_doc(p)              # raises SealBrokenError
+            known = self._read(p)
+            doc = self._frozen_doc(p, known)
             verified = True
         else:
             doc, verified = self.doc, False
@@ -358,7 +368,7 @@ class Registration:
                       "ok": registered is None
                       or int(n_trials) <= int(registered)}
 
-        status = self.seal_status(p) if p is not None else None
+        status = self.seal_status(p, known) if p is not None else None
         return {"pass": (not missing and not failed
                          and (budget is None or budget["ok"])),
                 "failed": failed, "missing": missing, "invalid": invalid,

@@ -144,6 +144,24 @@ class TestExpectedMaxAbsT:
         b = expected_max_abs_t(2000, n_sims=500)
         assert np.isfinite(a) and a == b
 
+    def test_mean_is_refused_where_the_tails_own_it(self):
+        # at 3 clusters the t tails dominate the mean of max|t| and the
+        # "threshold" stops being one anything could pass
+        with pytest.raises(ValueError, match="clusters"):
+            expected_max_abs_t(16, df=2)
+        assert expected_max_abs_t(16, df=6) > 0          # df>=5 is fine
+
+    def test_median_is_available_when_the_mean_is_not(self):
+        med = expected_max_abs_t(16, df=2, summary="median")
+        q95 = expected_max_abs_t(16, df=2, summary=0.95)
+        assert np.isfinite(med) and med > expected_max_abs_t(16)
+        assert q95 > med                                  # a fatter bar
+
+    def test_summary_must_be_something_it_can_compute(self):
+        for bad in ("q95", 1.5, 0.0):
+            with pytest.raises(ValueError):
+                expected_max_abs_t(16, summary=bad)
+
     def test_docs_quote_the_function_they_cite(self):
         # the cheat sheet in docs/workflow.md said 1.6 / 2.2 / 2.7 while the
         # function it names returns 1.47 / 2.08 / 2.60. One shipped artifact
@@ -585,6 +603,30 @@ class TestFills:
         with pytest.raises(ValueError):
             fill_bracket(m, f, f, f.iloc[:4])
 
+    def test_resting_asks_are_modelled_too(self):
+        # mirror image of the bid case: an ask fills when the HIGH reaches
+        # it, and bar 1's high never does
+        idx = pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC")
+        limit = pd.DataFrame({"A": [100.0] * 4}, index=idx)
+        high = pd.DataFrame({"A": [101.0, 99.0, 101.0, 101.0]}, index=idx)
+        low = pd.DataFrame({"A": [99.0, 101.0, 99.0, 99.0]}, index=idx)
+        fwd = pd.DataFrame({"A": [1.0, 1.0, 1.0, np.nan]}, index=idx)
+        mask = pd.DataFrame({"A": [True, True, True, False]}, index=idx)
+        ask = fill_bracket(mask, limit, high, fwd, side="sell")
+        bid = fill_bracket(mask, limit, low, fwd, side="buy")
+        assert ask["touch"]["n"] == bid["touch"]["n"] == 2
+        assert ask["through"]["n"] <= ask["touch"]["n"]
+        # the sides are not interchangeable: a BID read against highs asks
+        # whether the high fell below the bid — a different question with a
+        # different answer (1, not 2)
+        assert fill_bracket(mask, limit, high, fwd)["touch"]["n"] == 1
+
+    def test_side_must_be_one_of_two(self):
+        idx = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        f = pd.DataFrame({"A": [100.0] * 3}, index=idx)
+        with pytest.raises(ValueError, match="side"):
+            touch_mask(f, f, side="short")
+
     def test_touch_mask_checks_its_own_pair(self):
         idx = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
         limit = pd.DataFrame({"A": [100.0] * 6, "B": [100.0] * 6}, index=idx)
@@ -648,6 +690,33 @@ class TestLeakLint:
             "g = y.iloc[i+1]\n"                              # 6: always caught
             "ok = df.shift(1)\n")                            # 7: honest
         assert sorted(h.line for h in lint_source([src])) == [1, 2, 3, 4, 5, 6]
+
+    def test_prose_in_strings_is_not_code(self, tmp_path):
+        # the other half of the '#'-in-a-string bug: a pattern lying
+        # ENTIRELY inside a literal is documentation, not a leak — while a
+        # pattern whose match merely ENDS in one (a string argument) is
+        src = tmp_path / "feat.py"
+        src.write_text(
+            'msg = "never use .shift(-1) here"\n'                     # 1 no
+            'a = df["col#1"].shift(-1)\n'                             # 2 yes
+            'b = f"docs say .shift(-1)"\n'                            # 3 no
+            'c = df.merge_asof(other, direction="forward")\n'         # 4 yes
+            'd = df.fillna(method="bfill")\n'                         # 5 yes
+            "def f():\n"
+            '    """prose about .shift(-1) in a docstring"""\n'       # 7 no
+            "    return df.shift(-1)\n")                              # 8 yes
+        assert sorted(h.line for h in lint_source([src])) == [2, 4, 5, 8]
+
+    def test_missing_path_is_an_error_not_a_traceback(self, tmp_path,
+                                                      capsys):
+        from nullbar.leaklint import main
+        missing = tmp_path / "nope.py"
+        with pytest.raises(FileNotFoundError) as e:
+            lint_source([missing])
+        # a sentence, not an errno dump leaking from an open() deep inside
+        assert str(e.value).startswith("no such file or directory:")
+        assert main([str(missing)]) == 2
+        assert "nullbar-lint:" in capsys.readouterr().err
 
     def test_lint_hit_carries_what_a_reviewer_needs(self, tmp_path):
         src = tmp_path / "feat.py"
@@ -770,6 +839,16 @@ class TestExportedHelpers:
         assert bool(touch_mask(limit, low).iloc[0, 0]) is True
         assert bool(through_mask(limit, low, margin=5e-4).iloc[0, 0]) is False
 
+    def test_through_requires_trading_past_the_ask(self):
+        # the mirror: an ask at 100 is "traded through" only above 100.05,
+        # so the margin has to move the other way for side="sell"
+        idx = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        limit = pd.DataFrame({"A": [100.0] * 3}, index=idx)
+        high = pd.DataFrame({"A": [100.0, 100.0, 100.0]}, index=idx)
+        assert bool(touch_mask(limit, high, side="sell").iloc[0, 0]) is True
+        assert bool(through_mask(limit, high, margin=5e-4,
+                                 side="sell").iloc[0, 0]) is False
+
 
 # ── packaging ────────────────────────────────────────────────────────────────
 class TestPackaging:
@@ -786,6 +865,18 @@ class TestPackaging:
                            capture_output=True, text=True, cwd=ROOT)
         assert r.returncode == 0, r.stderr
         assert "0 hit(s)" in r.stdout
+
+    def test_a_verdict_reads_the_frozen_file_once(self, tmp_path):
+        from unittest import mock
+        reg = Registration("x", "h", {}, bar={"t3": "prose"})
+        path = tmp_path / "r.json"
+        reg.freeze(path)
+        real, seen = Path.read_text, []
+        with mock.patch.object(Path, "read_text",
+                               lambda self, *a, **k: (seen.append(str(self)),
+                                                      real(self, *a, **k))[1]):
+            reg.verdict({"t3": True})
+        assert sum(1 for c in seen if c.endswith("r.json")) == 1
 
     def test_ships_type_information(self):
         assert (ROOT / "nullbar" / "py.typed").exists()

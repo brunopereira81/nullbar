@@ -155,7 +155,8 @@ def dsr(observed_sr: float, n: int, n_trials: int | None,
 
 
 def expected_max_abs_t(n_cells: int, df: int | None = None,
-                       n_sims: int = 100_000, seed: int = 0) -> float:
+                       n_sims: int = 100_000, seed: int = 0,
+                       summary: str | float = "mean") -> float:
     """Expected maximum |t| across n_cells independent null cells.
 
     The deflation threshold for a multi-cell design: a bar of 3.0 has real
@@ -169,6 +170,13 @@ def expected_max_abs_t(n_cells: int, df: int | None = None,
     FLATTERING direction, in the one function whose job is to be
     unflattering. ``df=None`` is the large-sample limit, and a lower bound.
 
+    ``summary`` is "mean" (default), "median", or a quantile in (0, 1).
+    Below df=5 the MEAN is refused: the t distribution's tails dominate it
+    and the answer stops being a threshold anything could pass (16 cells:
+    6.97 at df=2, against 2.08 for the normal). With six or fewer clusters
+    you do not have enough data to set a bar — get more, use ``df=None``
+    knowing it understates, or ask for "median" and say so out loud.
+
     Simulated, seeded, and chunked over the simulation axis so a
     thousand-cell search does not allocate a gigabyte.
     """
@@ -176,13 +184,30 @@ def expected_max_abs_t(n_cells: int, df: int | None = None,
         raise ValueError("n_cells must be >= 1")
     if df is not None and df < 1:
         raise ValueError("df must be >= 1 (clusters - 1)")
+    if not (summary in ("mean", "median")
+            or (isinstance(summary, float) and 0.0 < summary < 1.0)):
+        raise ValueError("summary must be 'mean', 'median', or a quantile "
+                         "in (0, 1)")
+    if df is not None and df < 5 and summary == "mean":
+        raise ValueError(
+            f"the mean of max|t| is not a usable threshold at df={df} "
+            f"({df + 1} clusters): the t tails dominate it. Use more "
+            "clusters, summary='median' (or a quantile), or df=None as an "
+            "explicit lower bound.")
     rng = np.random.default_rng(seed)
     per_chunk = max(1, _SIM_CELLS_PER_CHUNK // n_cells)
-    total, done = 0.0, 0
+    total, done, maxima = 0.0, 0, []
     while done < n_sims:
         m = min(per_chunk, n_sims - done)
         draw = (rng.standard_normal((m, n_cells)) if df is None
                 else rng.standard_t(df, (m, n_cells)))
-        total += float(np.abs(draw).max(axis=1).sum())
+        block = np.abs(draw).max(axis=1)
+        if summary == "mean":
+            total += float(block.sum())
+        else:
+            maxima.append(block)
         done += m
-    return total / n_sims
+    if summary == "mean":
+        return total / n_sims
+    q = 0.5 if summary == "median" else float(summary)
+    return float(np.quantile(np.concatenate(maxima), q))
