@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "prereg"
+name = "nullbar"
 version = "0.1.0"
 description = "Pre-registration and honest statistics for trading research: trial ledgers, deflated Sharpe, clustered inference, leak detection, fill realism."
 readme = "README.md"
@@ -26,9 +26,9 @@ classifiers = [
 dependencies = ["numpy>=1.24", "pandas>=2.0"]
 
 [project.urls]
-Homepage = "https://github.com/brunopereira81/prereg"
-Repository = "https://github.com/brunopereira81/prereg"
-Issues = "https://github.com/brunopereira81/prereg/issues"
+Homepage = "https://github.com/brunopereira81/nullbar"
+Repository = "https://github.com/brunopereira81/nullbar"
+Issues = "https://github.com/brunopereira81/nullbar/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

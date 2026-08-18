@@ -1,4 +1,4 @@
-"""prereg — pre-registration and honest statistics for trading research.
+"""nullbar — pre-registration and honest statistics for trading research.
 
 Born from two years of production algo trading whose most valuable outputs
 were true negatives: a feature leak that explained a deployed model's entire

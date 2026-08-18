@@ -111,7 +111,7 @@ that the only version of this discipline that works is the one that runs as
   missed 4–8% were the best trades — executed gross was ~0.7× assumed.
 - **One test look.** The code raises if you take a second one.
 
-We packaged all of it as **[prereg](https://github.com/brunopereira81/prereg)**
+We packaged all of it as **[nullbar](https://github.com/brunopereira81/nullbar)**
 (MIT, the statistics stay open). The README tells the rest of the story,
 including the part where we used this harness to design, register, train,
 and honestly kill a brand-new model in a single day — a question that used

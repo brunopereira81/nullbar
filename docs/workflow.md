@@ -8,7 +8,7 @@ documents it where only discipline can.
 ## 0. Before anything: hunt your leaks
 
 ```python
-from prereg import prefix_replay_check, lint_source
+from nullbar import prefix_replay_check, lint_source
 
 report = prefix_replay_check(my_feature_fn, ohlcv_frame)
 assert not report["leak"], report
@@ -27,7 +27,7 @@ boundary makes bucket leaks invisible.
 ## 1. Register before you run
 
 ```python
-reg = prereg.Registration(
+reg = nullbar.Registration(
     name="...", hypothesis="...",
     design={...},                      # every fixed parameter, spelled out
     bar={"cond_name": "requirement"},  # the pass conditions, named
@@ -42,7 +42,7 @@ write a NEW registration; history does not get edited.
 ## 2. Count every trial
 
 ```python
-ledger = prereg.TrialLedger("experiments/trials.jsonl")
+ledger = nullbar.TrialLedger("experiments/trials.jsonl")
 ledger.record("my_exp", {"threshold": 0.10})
 ```
 
@@ -50,13 +50,13 @@ Every variant you evaluate — including the ones you abandon after one look —
 goes in. The ledger is append-only with no delete API, because the count it
 holds is the one number human memory reliably shrinks. A best-of-64 search
 has an expected max |t| of ~2.7 under pure noise
-(`prereg.expected_max_abs_t(64)`); if you don't know your 64, your t of 2.7
+(`nullbar.expected_max_abs_t(64)`); if you don't know your 64, your t of 2.7
 reads as a discovery.
 
 ## 3. Null control FIRST
 
 ```python
-nulls = prereg.null_control(entry_mask, fwd_returns, seeds=(0, 1, 2))
+nulls = nullbar.null_control(entry_mask, fwd_returns, seeds=(0, 1, 2))
 ```
 
 Shuffle forward returns within each asset and run the identical pipeline.
@@ -68,7 +68,7 @@ nothing downstream of it can be believed.
 ## 4. Cluster your inference
 
 ```python
-res = prereg.block_cluster_eval(entry_mask, fwd_returns, block="24h")
+res = nullbar.block_cluster_eval(entry_mask, fwd_returns, block="24h")
 ```
 
 One entry per asset per block; the block is the unit of inference.
@@ -79,7 +79,7 @@ should reference.
 ## 5. Price fills and costs honestly
 
 ```python
-bracket = prereg.fill_bracket(entry_mask, limit_px, low_px, fwd_returns)
+bracket = nullbar.fill_bracket(entry_mask, limit_px, low_px, fwd_returns)
 ```
 
 A resting limit order fills only if the market comes to it — and the entries
@@ -111,6 +111,6 @@ extra conditions you invented after seeing the data cannot rescue a fail.
 | 16 cells | 2.2 | some headroom |
 | 64 cells | 2.7 | almost none |
 
-(`prereg.expected_max_abs_t(k)` — simulated, seeded.) And for Sharpe-based
-work: `prereg.dsr(...)` needs the trial count; passing `None` returns `None`,
+(`nullbar.expected_max_abs_t(k)` — simulated, seeded.) And for Sharpe-based
+work: `nullbar.dsr(...)` needs the trial count; passing `None` returns `None`,
 never 0.0. An unmeasured deflation is not a verdict.

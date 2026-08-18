@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from prereg import (AlreadySpentError, Registration, TrialLedger,
+from nullbar import (AlreadySpentError, Registration, TrialLedger,
                     block_cluster_eval, clustered_t, dsr, expected_max_abs_t,
                     expected_max_sharpe, fill_bracket, lint_source,
                     null_control, prefix_replay_check, psr, sharpe)

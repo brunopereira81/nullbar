@@ -18,10 +18,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import prereg
+import nullbar
 
 rng = np.random.default_rng(7)
-workdir = Path(tempfile.mkdtemp(prefix="prereg_demo_"))
+workdir = Path(tempfile.mkdtemp(prefix="nullbar_demo_"))
 
 # ── synthetic market: 8 assets, 6000 hourly bars, tiny planted edge ─────────
 n, k = 6000, 8
@@ -36,7 +36,7 @@ cut = pd.Timestamp("2024-06-01", tz="UTC")
 research = idx < cut
 
 # ── 1. register BEFORE running ──────────────────────────────────────────────
-reg = prereg.Registration(
+reg = nullbar.Registration(
     name="demo-signal",
     hypothesis="the demo signal predicts next-period returns",
     design={"entry_rate": 0.08, "hold": "1 bar", "cost_pct": 0.10},
@@ -50,7 +50,7 @@ reg_path = workdir / "demo-signal.json"
 print(f"registered: sha256 {reg.freeze(reg_path)[:16]}…  -> {reg_path}")
 
 # ── 2. every variant you try goes in the ledger ─────────────────────────────
-ledger = prereg.TrialLedger(workdir / "trials.jsonl")
+ledger = nullbar.TrialLedger(workdir / "trials.jsonl")
 ledger.record("demo-signal", {"entry_rate": 0.08})
 # (imagine the 63 other variants you tried last month…)
 for th in (0.05, 0.10, 0.15):
@@ -58,14 +58,14 @@ for th in (0.05, 0.10, 0.15):
 print(f"trials on record: {ledger.count()}")
 
 # ── 3. null control FIRST ───────────────────────────────────────────────────
-nulls = prereg.null_control(signal[research], fwd_real[research],
+nulls = nullbar.null_control(signal[research], fwd_real[research],
                             block="24h", seeds=(0, 1, 2))
 worst = max(abs(x["t"]) for x in nulls)
 print(f"null control: max |t| across seeds = {worst:.2f}  "
       f"({'OK' if worst < 3 else 'PIPELINE BROKEN — stop here'})")
 
 # ── 4. the research-window number (free to look at) ─────────────────────────
-res = prereg.block_cluster_eval(signal[research], fwd_real[research],
+res = nullbar.block_cluster_eval(signal[research], fwd_real[research],
                                 block="24h")
 print(f"research window: {res['trades']} trades, {res['clusters']} clusters, "
       f"gross {res['gross']:+.3f}%, clustered t {res['t']:+.2f}")
@@ -74,20 +74,20 @@ print(f"research window: {res['trades']} trades, {res['clusters']} clusters, "
 close = 100 + pd.DataFrame(rng.normal(0, 0.4, (n, k)), index=idx,
                            columns=cols).cumsum()
 low = close - rng.uniform(0.0, 0.8, (n, k))
-bracket = prereg.fill_bracket(signal[research], close[research],
+bracket = nullbar.fill_bracket(signal[research], close[research],
                               low[research], fwd_real[research])
 print("fill bracket:", {kk: f"{v['gross']:+.3f}% (n={v['n']})"
                         for kk, v in bracket.items()})
 
 # ── 6. deflate by what you searched ─────────────────────────────────────────
 per_trial_srs = rng.normal(0.0, 0.02, ledger.count())   # your sweep's SRs
-d = prereg.dsr(observed_sr=0.03, n=res["clusters"],
+d = nullbar.dsr(observed_sr=0.03, n=res["clusters"],
                n_trials=ledger.count(),
                sr_variance=float(np.var(per_trial_srs)))
 print(f"deflated Sharpe probability (n_trials={ledger.count()}): {d:.3f}")
 
 # ── 7. ONE test look, then the verdict against the frozen bar ───────────────
-test = prereg.block_cluster_eval(signal[~research], fwd_real[~research],
+test = nullbar.block_cluster_eval(signal[~research], fwd_real[~research],
                                  block="24h")
 reg.spend_test_look(reg_path, results=test)
 verdict = reg.verdict({
@@ -102,5 +102,5 @@ print(f"VERDICT: {'PASS' if verdict['pass'] else 'FAIL'} "
 # and the enforcement:
 try:
     reg.spend_test_look(reg_path, results={"t": 99})
-except prereg.AlreadySpentError as e:
+except nullbar.AlreadySpentError as e:
     print(f"second test look refused: {e}")

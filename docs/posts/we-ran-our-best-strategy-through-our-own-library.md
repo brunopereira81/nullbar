@@ -3,7 +3,7 @@
 *2026-08-12 · Second post. The [first one](the-leak-that-survived-two-years.md)
 was about the leak that ate two years. This one is about the strategy that
 survived the leak — our best, most-replicated, most-loved result — and what
-happened when we fed it to [prereg](https://github.com/brunopereira81/prereg),
+happened when we fed it to [nullbar](https://github.com/brunopereira81/nullbar),
 the library we extracted from the wreckage.*
 
 ## The strategy
@@ -91,6 +91,6 @@ variance.
 Every backtest is a claim. Most are false in ways their authors cannot see —
 we were careful, tested, reviewed, and wrong for two years. The seven lines
 above are what "checked" looks like. The library that prints them is MIT,
-[on GitHub](https://github.com/brunopereira81/prereg), and the walkthrough
+[on GitHub](https://github.com/brunopereira81/nullbar), and the walkthrough
 script is `examples/`-simple. Run your favorite strategy through it. One of
 two printouts comes out, and either one is worth more than what you paid.

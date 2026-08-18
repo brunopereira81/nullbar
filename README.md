@@ -1,6 +1,6 @@
-# prereg
+# nullbar
 
-[![tests](https://github.com/brunopereira81/prereg/actions/workflows/test.yml/badge.svg)](https://github.com/brunopereira81/prereg/actions/workflows/test.yml)
+[![tests](https://github.com/brunopereira81/nullbar/actions/workflows/test.yml/badge.svg)](https://github.com/brunopereira81/nullbar/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
@@ -9,7 +9,7 @@
 Most backtesting tools help you find an edge. This library assumes you will
 fool yourself while trying — because in two years of production algorithmic
 trading, that is what happened to us, over and over, despite code review,
-2,000+ tests, and genuine care. `prereg` is the machinery that caught it,
+2,000+ tests, and genuine care. `nullbar` is the machinery that caught it,
 extracted into a standalone package.
 
 ## The one-day story this library made possible
@@ -48,7 +48,7 @@ year.
 
 ```bash
 # from a clone (editable — edits are live):
-git clone https://github.com/brunopereira81/prereg && cd prereg
+git clone https://github.com/brunopereira81/nullbar && cd nullbar
 pip install -e .
 
 # run the examples:
@@ -62,10 +62,10 @@ PyPI release pending — until then, install from the clone.
 ## Quickstart
 
 ```python
-import prereg
+import nullbar
 
 # 1. Register before you run
-reg = prereg.Registration(
+reg = nullbar.Registration(
     name="mean-reversion-24h",
     hypothesis="bottom-decile dist_ma168 mean-reverts over 24h",
     design={"hold_bars": 24, "entry_pct": 0.10, "cost_pct": 0.230},
@@ -76,18 +76,18 @@ reg = prereg.Registration(
 reg.freeze("experiments/mr24.json")          # hashed; edits now visible
 
 # 2. Count every variant you evaluate
-ledger = prereg.TrialLedger("experiments/trials.jsonl")
+ledger = nullbar.TrialLedger("experiments/trials.jsonl")
 ledger.record("mr24", {"entry_pct": 0.10})
 
 # 3. Null control FIRST, then the real number, clustered
-nulls = prereg.null_control(entry_mask, fwd_returns)      # must be flat
-result = prereg.block_cluster_eval(entry_mask, fwd_returns)
+nulls = nullbar.null_control(entry_mask, fwd_returns)      # must be flat
+result = nullbar.block_cluster_eval(entry_mask, fwd_returns)
 
 # 4. Price fills honestly
-bracket = prereg.fill_bracket(entry_mask, limit_px, low_px, fwd_returns)
+bracket = nullbar.fill_bracket(entry_mask, limit_px, low_px, fwd_returns)
 
 # 5. Deflate by what you actually searched
-d = prereg.dsr(observed_sr, n=n_periods, n_trials=ledger.count(),
+d = nullbar.dsr(observed_sr, n=n_periods, n_trials=ledger.count(),
                sr_variance=var_across_trials)
 
 # 6. Spend the single test look, on the record

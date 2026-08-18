@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from prereg import lint_source, prefix_replay_check
+from nullbar import lint_source, prefix_replay_check
 
 rng = np.random.default_rng(3)
 idx = pd.date_range("2024-01-01", periods=24 * 60, freq="h", tz="UTC")
