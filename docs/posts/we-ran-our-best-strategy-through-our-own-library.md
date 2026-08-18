@@ -20,12 +20,13 @@ Here is the entire evaluation, run live against seven years of data, as seven
 printed lines:
 
 ```
-[1] registered: sha256 8cb4e5e00dbb326e…
+[1] registered: sha256 73d2df52eea01fba…
 [2] trials on record: 64  (sr spread across them: 0.0134)
 [3] null control: scrambled runs pay their holdings' unconditional +0.097%
     and no more (max |t| 1.02)  (OK); holding all 8 pays +0.096%/24h
 [4] OOS: 1815 trades, 560 clusters, gross +0.235%/trade,
-    cluster mean +0.597%, clustered t +2.42   (luck-of-64: 2.61)
+    cluster mean +0.597%, clustered t +2.42
+    (noise clears 3.17 5% of the time over 32 two-sided cells)
     2022 (the bear year): -0.616%
 [5] fill bracket: assumed +0.015% -> touch -0.035% -> through -0.064%
     (net at 0.230% RT: -0.265% to -0.294%)
@@ -43,10 +44,11 @@ leveraged beta wearing a lab coat.
 
 **Line 2** is the confession that changes everything. We didn't test one
 strategy; we tested sixteen signals at two horizons in two directions — 64
-cells, each re-scored so the ledger carries its Sharpe rather than just its
-name. That count buys the sentence most retail quants never hear, printed on
-line 4: **after 64 tries, pure luck's best result is typically t ≈ 2.6.**
-Whatever wins your search must be judged against *that*, not against zero.
+evaluations, each re-scored so the ledger carries its Sharpe rather than
+just its name. For threshold purposes that is **32** cells, not 64: |t| is
+two-sided, so testing a signal long and short is one cell counted twice.
+Whatever wins your search has to be judged against what a search that size
+throws up by luck — not against zero.
 
 **Line 3** is the sanity check that has to pass before any of this means
 anything, and it is the line we got wrong twice. Scrambling each asset's
@@ -63,12 +65,22 @@ very effect under test. The reference has to be what the rule actually holds.
 If a scrambled run pays more than that, your machinery is the effect and
 every number downstream of it is fiction.
 
-**Line 4** is our beloved strategy meeting line 2. Clustered properly (one
-entry per asset per 24h block — that alone deflated the naive 3.79 to the
-2.4–2.7 range), the effect is **t = 2.42 against a luck-of-64 baseline of
-2.61**. Our best discovery is statistically indistinguishable from being the
-winner of our own search. And 2022 says **−0.616%**: in the year that
-separates edge from bull beta, it lost.
+**Line 4** is our beloved strategy meeting line 2, and the number to hold
+onto is **3.17**. Clustered properly — one entry per asset per 24h block,
+which alone deflated a naive 3.79 into the low 2s — the effect is
+**t = 2.42**, while a 32-cell search of pure noise throws up a best |t| of
+3.17 or more *five percent of the time*. Our best discovery does not clear
+the line where luck stops being a plausible explanation. It does not come
+close.
+
+That comparison is the one honest way to use a trial count, and it is
+easy to get wrong in the flattering direction: the intuitive threshold is
+the *expected* maximum of the search, which for 32 cells is 2.35 — and
+pure noise beats its own expected maximum **about 45% of the time**. A
+threshold a coin flip clears is not a threshold. We pre-registered 3.0,
+which turns out to sit slightly *below* the 5% noise line: our own bar was,
+if anything, a touch generous to us. And 2022 says **−0.616%**: in the year
+that separates edge from bull beta, it lost.
 
 **Line 5** prices reality. A resting limit bid doesn't always fill — and the
 misses aren't random. When we measured 416k labeled bars: bids filled 92–96%
