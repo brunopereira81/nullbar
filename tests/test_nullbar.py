@@ -1870,3 +1870,79 @@ class TestPerYearUsesTheDecisionTimestamp:
         straddling = [b for b, g in df.groupby("block")
                       if pd.DatetimeIndex(g["time"]).year.nunique() > 1]
         assert straddling, "the fixture must contain a straddling block"
+
+
+class TestNumbersTooLargeForAFloat:
+    """``10**400`` is a perfectly good Python int and ``float()`` refuses
+    it, so ``math.isfinite(value)`` raised a raw ``OverflowError`` — out of
+    validation from a THRESHOLD, and out of grading from a RESULT metric.
+    Both sides of the comparison are read off disk.
+    """
+
+    BIG = 10 ** 400
+
+    def _reg(self, tmp_path, spec):
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps(
+            {"name": "x", "hypothesis": "h", "design": {},
+             "bar": {"c": spec}, "created_at": "2026-01-01T00:00:00+00:00",
+             "cells_budget": 1}))
+        return p
+
+    @pytest.mark.parametrize("value", [10 ** 400, -10 ** 400])
+    def test_an_oversized_threshold_is_refused_from_disk(self, tmp_path,
+                                                         value):
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": value})
+        with pytest.raises(OSError, match="not a finite number"):
+            nullbar.Registration.load(p)
+
+    @pytest.mark.parametrize("value", [10 ** 400, -10 ** 400])
+    def test_an_oversized_threshold_is_refused_in_code(self, value):
+        with pytest.raises(ValueError, match="not a finite number"):
+            nullbar.Registration(
+                name="x", hypothesis="h", design={},
+                bar={"c": {"metric": "t", "op": ">=", "value": value}},
+                cells_budget=1)
+
+    def test_an_oversized_RESULT_cannot_be_graded(self, tmp_path):
+        """The other side of the comparison, which the report did not name.
+        Reported as ungradable rather than FAILED: calling it a failure
+        would claim it lost a comparison nobody managed to perform."""
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": 3.0})
+        v = nullbar.Registration.load(p).verdict(results={"t": self.BIG})
+        assert v["pass"] is False
+        assert v["missing"] == ["c"] and v["failed"] == []
+
+    def test_a_NaN_result_still_FAILS_rather_than_going_missing(self,
+                                                                tmp_path):
+        # a NaN IS a measurement and it is not a passing one — the
+        # distinction the overflow fix must not flatten
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": 3.0})
+        v = nullbar.Registration.load(p).verdict(results={"t": float("nan")})
+        assert v["failed"] == ["c"] and v["missing"] == []
+
+    def test_an_oversized_budget_does_not_crash_the_report(self, tmp_path):
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps(
+            {"name": "x", "hypothesis": "h", "design": {},
+             "bar": {"c": {"metric": "t", "op": ">=", "value": 3.0}},
+             "created_at": "2026-01-01T00:00:00+00:00",
+             "cells_budget": 10 ** 400}))
+        reg = nullbar.Registration.load(p)
+        (tmp_path / "r.test_look.json").write_text(json.dumps(
+            {"at": "2026-02-01T00:00:00+00:00", "results": {"t": 5.0},
+             "registration_sha256": reg.seal_status(p)["sha256"]}))
+        data = nullbar.report_data(p, sims=100)      # must not raise
+        assert data["verdict"]["status"] == "INCOMPLETE"
+
+    @pytest.mark.parametrize("value", [10 ** 400, float("nan"),
+                                       float("inf"), "3.0", True, None, []])
+    def test_finite_float_refuses_everything_that_is_not_a_measurement(
+            self, value):
+        from nullbar._records import finite_float
+        assert finite_float(value) is None
+
+    @pytest.mark.parametrize("value", [0, 1, -1, 3.5, 1e308])
+    def test_finite_float_accepts_real_numbers(self, value):
+        from nullbar._records import finite_float
+        assert finite_float(value) == float(value)

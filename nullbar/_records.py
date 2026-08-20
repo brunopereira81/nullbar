@@ -31,7 +31,9 @@ they have instead of becoming a traceback out of a new exception type.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+from typing import Any
 
 #: Generous by design — a 20k-cell ledger is a few megabytes. The cap is a
 #: backstop against a planted file, not a budget anyone should ever meet.
@@ -67,6 +69,29 @@ def check_record(path: Path, what: str = "record") -> Path:
             f"{MAX_RECORD_BYTES}-byte limit — a record is a small document, "
             "and this one is not being read whole")
     return path
+
+
+def finite_float(value: Any) -> float | None:
+    """``value`` as a finite float, or None when it is not a measurement.
+
+    ``10**400`` is a perfectly good Python int and ``float()`` refuses it,
+    so ``math.isfinite(value)`` raised a raw ``OverflowError`` out of
+    validation AND out of grading — from a threshold on one side of the
+    comparison and from a result metric on the other, both read off disk.
+
+    Bools are excluded deliberately: ``True`` is not a measurement, and
+    ``float(True) == 1.0`` would make it look like one.
+
+    One helper rather than a conversion at each site, because there are
+    five of those and the report named one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        out = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None
+    return out if math.isfinite(out) else None
 
 
 def loads_mapping(raw: str | bytes, what: str = "record") -> dict:

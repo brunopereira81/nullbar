@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from ._records import record_text
+from ._records import finite_float, record_text
 from .anchor import verify_anchor
 from .ledger import TrialLedger
 from .registration import (BarMismatchError, Registration, _condition_state,
@@ -110,12 +110,7 @@ def evidence(result: dict[str, Any] | None = None, *,
 
 def _finite(value: Any) -> bool:
     """True only for a real, finite number — bools are not measurements."""
-    if isinstance(value, bool) or value is None:
-        return False
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
+    return finite_float(value) is not None
 
 
 def _num(value: Any) -> float | None:
@@ -187,8 +182,8 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
     budget_n: int | None = None
     budget_bad: str | None = None
     if budget is not None:
-        if isinstance(budget, bool) or not isinstance(budget, (int, float)) \
-                or float(budget) != int(budget):
+        as_float = finite_float(budget)
+        if as_float is None or as_float != int(as_float):
             budget_bad = (f"the registration records a cells_budget of "
                           f"{budget!r}, which is not a whole number of cells")
         elif int(budget) < 1:

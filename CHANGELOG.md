@@ -20,6 +20,21 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **A number too large for a float escaped as `OverflowError`.**
+  `10**400` is a perfectly good Python int and `float()` refuses it, so
+  `math.isfinite(value)` raised out of validation — and out of GRADING,
+  because the same conversion happens on the RESULT side of the comparison,
+  read from the test-look stamp and just as untrusted as the threshold.
+  Five sites converted an untrusted number; the report named one. One
+  helper now, `finite_float`, which also excludes bools (`float(True)` is
+  `1.0`, and `True` is not a measurement).
+
+  Three outcomes are kept distinct, deliberately: not a number at all is
+  *"the record does not say"*, a **NaN FAILS** the condition because a NaN
+  is a measurement and not a passing one, and out of float range is
+  ungradable — calling that a failure would claim it lost a comparison
+  nobody managed to perform. Collapsing the NaN case into "missing" was a
+  regression this fix introduced and an existing test caught.
 - **The per-year breakdown filed trades under the wrong year.**
   `block_cluster_eval` grouped by the block's LEFT EDGE, and `floor` is
   epoch-aligned, so a block boundary is not a calendar boundary: at

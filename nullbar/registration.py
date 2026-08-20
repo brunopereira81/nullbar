@@ -28,7 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import RecordReadError, loads_mapping, record_text
+from ._records import (RecordReadError, finite_float, loads_mapping,
+                       record_text)
 
 
 class AlreadySpentError(RuntimeError):
@@ -62,10 +63,25 @@ def _check_spec(spec: dict[str, Any], results: dict[str, Any]) -> bool | None:
     if spec["metric"] not in results:
         return None
     value = results[spec["metric"]]
-    try:
-        value = abs(float(value)) if spec.get("abs") else float(value)
-    except (TypeError, ValueError):
+    # The RESULT side of the comparison, read from the test-look stamp and
+    # just as untrusted as the threshold. Three outcomes, not two:
+    #   * not a number at all -> None, "the record does not say"
+    #   * NaN                 -> False, because a NaN is a measurement and
+    #                           it is not a passing one (pinned by test)
+    #   * out of float range  -> None: 10**400 raised OverflowError from
+    #                           inside grading, and "cannot be graded" is
+    #                           the honest label — calling it a FAILURE
+    #                           would claim it lost a comparison nobody
+    #                           managed to perform
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
+    if value != value:                       # NaN
+        return False
+    value = finite_float(value)
+    if value is None:
+        return None
+    if spec.get("abs"):
+        value = abs(value)
     if value != value:                       # NaN is not a passing measurement
         return False
     return bool(_OPS[spec["op"]](value, float(spec["value"])))
@@ -146,12 +162,11 @@ def bar_spec_problem(cond: Any, req: Any) -> tuple[type, str] | None:
     if req["op"] not in _OPS:
         return (ValueError,
                 f"bar[{cond!r}] op {req['op']!r} is not one of {sorted(_OPS)}")
-    value = req["value"]
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
-            or not math.isfinite(value):
+    if finite_float(req["value"]) is None:
         return (ValueError,
-                f"bar[{cond!r}] value {value!r} is not a finite number — a "
-                "threshold nothing can be compared against is not a bar")
+                f"bar[{cond!r}] value {req['value']!r} is not a finite "
+                "number — a threshold nothing can be compared against is "
+                "not a bar")
     if "abs" in req and not isinstance(req["abs"], bool):
         return (TypeError,
                 f"bar[{cond!r}] abs must be true or false, got "
