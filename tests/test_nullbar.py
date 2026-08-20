@@ -1946,3 +1946,56 @@ class TestNumbersTooLargeForAFloat:
     def test_finite_float_accepts_real_numbers(self, value):
         from nullbar._records import finite_float
         assert finite_float(value) == float(value)
+
+    def test_an_oversized_ledger_sharpe_does_not_crash(self, tmp_path):
+        """The FIFTH conversion site — named in the commit message of the
+        fix that migrated the other four, and then not migrated."""
+        p = tmp_path / "t.jsonl"
+        p.write_text(json.dumps({"hash": "a", "name": "s",
+                                 "params": {"q": 1},
+                                 "metrics": {"sr": self.BIG}}) + "\n")
+        assert nullbar.TrialLedger(p).sharpes() == []
+        assert nullbar.TrialLedger(p).sr_variance() is None
+
+    def test_an_unusable_sharpe_is_skipped_but_the_trial_still_counts(
+            self, tmp_path):
+        # the cell WAS searched; only its Sharpe cannot be read, and the
+        # count is what every deflation figure divides by
+        p = tmp_path / "t.jsonl"
+        rows = [{"hash": "a", "name": "s", "params": {"q": 1},
+                 "metrics": {"sr": self.BIG}},
+                {"hash": "b", "name": "s", "params": {"q": 2},
+                 "metrics": {"sr": 0.2}},
+                {"hash": "c", "name": "s", "params": {"q": 3},
+                 "metrics": {"sr": 0.4}}]
+        p.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        led = nullbar.TrialLedger(p)
+        assert led.count() == 3
+        assert led.sharpes() == [0.2, 0.4]
+        assert led.sr_variance() == pytest.approx(0.02)
+
+    @pytest.mark.parametrize("sr", [10 ** 400, float("nan"), float("inf"),
+                                    "0.3", True, None, []])
+    def test_every_unusable_sharpe_shape(self, tmp_path, sr):
+        p = tmp_path / "t.jsonl"
+        p.write_text(json.dumps({"hash": "a", "name": "s", "params": {},
+                                 "metrics": {"sr": sr}}) + "\n")
+        assert nullbar.TrialLedger(p).sharpes() == []
+
+    def test_the_REPORT_path_survives_it(self, tmp_path):
+        """report_data reads the ledger for its trial count and spread —
+        the path the crash actually reached a user through."""
+        p = tmp_path / "r.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=4)
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50})
+        led = tmp_path / "r.jsonl"
+        led.write_text(json.dumps({"hash": "a", "name": "s", "params": {},
+                                   "metrics": {"sr": self.BIG}}) + "\n")
+        data = nullbar.report_data(p, led, sims=100)      # must not raise
+        assert data["trials"]["count"] == 1
+        assert data["trials"]["sr_variance"] is None
+        assert any("recorded a Sharpe" in g for g in data["gaps"])

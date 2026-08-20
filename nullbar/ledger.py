@@ -22,7 +22,8 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from ._records import RecordReadError, check_record, loads_mapping
+from ._records import (RecordReadError, check_record, finite_float,
+                       loads_mapping)
 
 try:                                   # POSIX
     import fcntl
@@ -257,13 +258,27 @@ class TrialLedger:
 
     # ── what deflation needs ────────────────────────────────────────────────
     def sharpes(self) -> list[float]:
-        """Recorded per-period Sharpes, in ledger order."""
+        """Recorded per-period Sharpes, in ledger order.
+
+        Through ``finite_float`` like every other untrusted number. This
+        was the FIFTH conversion site, named in the commit message of the
+        fix that migrated the other four and then not migrated — so
+        ``metrics: {"sr": 10**400}`` still raised a numpy TypeError, and
+        ``report_data`` propagated it. Listing a site is not fixing it.
+
+        An UNUSABLE Sharpe is skipped exactly like an absent one, and the
+        row still COUNTS as a trial — the cell was searched, only its
+        Sharpe cannot be read. That keeps the count, which every deflation
+        figure divides by, untouched; and when too few usable Sharpes
+        remain ``sr_variance()`` returns None, which the report already
+        states as "fewer than two ledger trials recorded a Sharpe, so the
+        spread deflation needs is unmeasured". Nothing goes quiet.
+        """
         out = []
         for r in self._scan():
-            v = (r.get("metrics") or {}).get("sr")
-            if isinstance(v, (int, float)) and not isinstance(v, bool) \
-                    and np.isfinite(v):
-                out.append(float(v))
+            v = finite_float((r.get("metrics") or {}).get("sr"))
+            if v is not None:
+                out.append(v)
         return out
 
     def sr_variance(self) -> float | None:

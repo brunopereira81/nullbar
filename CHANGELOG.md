@@ -29,6 +29,16 @@ machine down with it.
   helper now, `finite_float`, which also excludes bools (`float(True)` is
   `1.0`, and `True` is not a measurement).
 
+  The ledger's Sharpe was the fifth of those five sites, named in the
+  commit message of the fix that migrated the other four and then not
+  migrated — `metrics: {"sr": 10**400}` still raised a numpy TypeError and
+  `report_data` propagated it. Listing a site is not fixing it. An unusable
+  Sharpe is now skipped exactly like an absent one, and the row still
+  COUNTS as a trial: the cell was searched, only its Sharpe cannot be read,
+  and the count is what every deflation figure divides by. When too few
+  usable Sharpes remain, `sr_variance()` returns None and the report
+  already says so.
+
   Three outcomes are kept distinct, deliberately: not a number at all is
   *"the record does not say"*, a **NaN FAILS** the condition because a NaN
   is a measurement and not a passing one, and out of float range is
