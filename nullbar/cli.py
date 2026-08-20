@@ -69,20 +69,25 @@ def _report(argv: list[str]) -> int:
 def _anchor(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         prog="nullbar anchor",
-        description="Record which commits carry a registration and its "
-                    "test-look stamp, so the order they were written in "
-                    "stops depending on the researcher's clock.")
+        description="Record which commits carry a registration, its trial "
+                    "ledger and its test-look stamp, so the order they were "
+                    "written in stops depending on the researcher's clock.")
     ap.add_argument("registration")
+    ap.add_argument("--ledger", help="path to the trial ledger JSONL "
+                                     "(default: the registration's path "
+                                     "with .jsonl). A ledger left uncovered "
+                                     "can be shrunk without contradicting "
+                                     "anything else in the record")
     ap.add_argument("--commit", action="store_true",
-                    help="commit these two paths first (never your staged "
+                    help="commit these paths first (never your staged "
                          "work)")
     ap.add_argument("-m", "--message", help="commit message for --commit")
     args = ap.parse_args(argv)
 
     from .anchor import GitError, anchor
     try:
-        doc = anchor(args.registration, commit=args.commit,
-                     message=args.message)
+        doc = anchor(args.registration, ledger=args.ledger,
+                     commit=args.commit, message=args.message)
     except FileNotFoundError as exc:
         print(f"nullbar anchor: {exc}", file=sys.stderr)
         return 2
@@ -91,6 +96,11 @@ def _anchor(argv: list[str]) -> int:
         return 2
     for role, entry in doc["entries"].items():
         print(f"{role}: {entry['commit'][:12]} {entry['path']}")
+    for hole in doc.get("uncovered") or []:
+        print(f"  ! not covered: {hole}", file=sys.stderr)
+    if "ledger" not in doc["entries"] and not doc.get("uncovered"):
+        print("  - no trial ledger was anchored: pass --ledger if the "
+              "search recorded one under a different name", file=sys.stderr)
     print(f"anchor written to "
           f"{Path(args.registration).with_suffix('.anchor.json')}")
     return 0

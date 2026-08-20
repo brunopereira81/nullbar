@@ -591,3 +591,62 @@ class TestTheLedgerIsAnchoredToo:
         assert any("ledger" in u for u in doc["uncovered"])
         assert any("attested by nothing" in f
                    for f in verify_anchor(p)["findings"])
+
+
+class TestALedgerNamedSomethingElse:
+    """Coverage that depends on a filename fails silently when the name
+    differs. nullbar's own walkthrough writes `trials.jsonl` beside
+    `mr24.json`, and the first version of ledger anchoring covered nothing
+    at all there while still reporting an intact anchor."""
+
+    def _repo(self, tmp_path, ledger_name):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=40)
+        p = tmp_path / "mr24.json"
+        reg.freeze(p)
+        led = nullbar.TrialLedger(tmp_path / ledger_name)
+        for i in range(4):
+            led.record("s", {"q": i})
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "freeze"], cwd=tmp_path,
+                       check=True)
+        reg.spend_test_look(p, results={"t": 5.0})
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "look"], cwd=tmp_path,
+                       check=True)
+        return p, tmp_path / ledger_name
+
+    def test_an_explicit_ledger_is_covered(self, tmp_path):
+        p, led = self._repo(tmp_path, "trials.jsonl")
+        doc = nullbar.anchor(p, ledger=led)
+        assert doc["entries"]["ledger"]["path"] == "trials.jsonl"
+        assert verify_anchor(p)["status"] == "intact"
+
+    def test_an_explicitly_covered_ledger_is_tamper_evident(self, tmp_path):
+        p, led = self._repo(tmp_path, "trials.jsonl")
+        nullbar.anchor(p, ledger=led)
+        led.write_text(led.read_text().splitlines()[0] + "\n")
+        assert verify_anchor(p)["status"] == "broken"
+
+    def test_a_ledger_the_anchor_missed_is_named_by_the_report(self,
+                                                               tmp_path):
+        # the anchor cannot know it missed one; the report knows BOTH which
+        # ledger was counted and which files were attested
+        p, led = self._repo(tmp_path, "trials.jsonl")
+        nullbar.anchor(p)                       # no --ledger: misses it
+        assert "ledger" not in nullbar.verify_anchor(p)["entries"]
+        data = report_data(p, led, sims=200)
+        assert any("is not among the files this anchor covers" in g
+                   for g in data["gaps"])
+
+    def test_the_sibling_convention_still_needs_no_argument(self, tmp_path):
+        p, led = self._repo(tmp_path, "mr24.jsonl")
+        nullbar.anchor(p)
+        assert "ledger" in nullbar.verify_anchor(p)["entries"]
+        assert not any("not among the files this anchor covers" in g
+                       for g in report_data(p, led, sims=200)["gaps"])

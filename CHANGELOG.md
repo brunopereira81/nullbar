@@ -30,6 +30,15 @@ reproduced before being fixed and mutation-checked after.
   ledger stated as a note: marking every older record as tampered would
   teach a reader to ignore the word.
 
+  `anchor()` and `nullbar anchor` take `--ledger` for a ledger that is not
+  the registration's own stem — **coverage that depends on a filename fails
+  silently when the name differs**, and the first version of this covered
+  nothing at all in nullbar's own walkthrough (which writes `trials.jsonl`
+  beside `mr24.json`) while still reporting an intact anchor. The report
+  closes that loop from the other side: it is the one place that knows both
+  which ledger the count came from and which files the anchor covers, and it
+  names the ledger when they disagree.
+
 ### Fixed — the one look, the budget, and malformed records
 
 - **The one-look guard had a race.** `spend_test_look` asked whether the

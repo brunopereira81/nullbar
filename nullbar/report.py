@@ -284,6 +284,23 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
                     "result existed (nullbar anchor)")
     elif anchor["status"] == "unverifiable":
         gaps.append("the recorded anchor could not be checked here")
+    if anchor["status"] in ("intact", "broken") and trials["path"]:
+        # Closing the loop from the OTHER side. The anchor finds a ledger by
+        # a filename convention and cannot know it missed one named
+        # something else — this library's own walkthrough writes
+        # `trials.jsonl`, and coverage silently skipped it while the anchor
+        # still read `intact`. The report is the one place that knows BOTH
+        # which ledger was counted and which files were attested.
+        counted = _resolved(trials["path"])
+        covered = {_resolved(e.get("disk_path"))
+                   for e in anchor["entries"].values()}
+        covered.discard(None)
+        if counted is not None and counted not in covered:
+            gaps.append(
+                f"the trial ledger the count came from ({Path(trials['path']).name}) "
+                "is not among the files this anchor covers, so the number "
+                "of cells searched is attested by nothing (nullbar anchor "
+                "--ledger)")
 
     # Which gaps are load-bearing for THIS registration.
     blocking = []
@@ -335,6 +352,14 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
                                    sims=sims, seed=seed)
     data["gaps"] = gaps
     return data
+
+
+def _resolved(path: Any) -> str | None:
+    """An absolute, symlink-free path string, or None if unusable."""
+    try:
+        return str(Path(path).resolve())
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _before(a: Any, b: Any) -> bool:

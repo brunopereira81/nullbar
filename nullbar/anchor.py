@@ -132,8 +132,8 @@ def _entry(path: Path, repo: Path) -> dict[str, Any]:
                                  repo)}
 
 
-def anchor(reg_path: str | Path, *, commit: bool = False,
-           message: str | None = None) -> dict[str, Any]:
+def anchor(reg_path: str | Path, *, ledger: str | Path | None = None,
+           commit: bool = False, message: str | None = None) -> dict[str, Any]:
     """Record which commits carry the registration and its test-look stamp.
 
     Writes ``<registration>.anchor.json`` beside them and returns it. By
@@ -147,6 +147,13 @@ def anchor(reg_path: str | Path, *, commit: bool = False,
         raise FileNotFoundError(f"no registration at {reg}")
     repo = _toplevel(reg)
     paths = role_paths(reg)
+    # An explicit ledger beats the sibling convention. Coverage that
+    # depends on a filename fails SILENTLY when the name differs — this
+    # library's own walkthrough writes `trials.jsonl` beside `mr24.json`,
+    # and the first version of this covered nothing at all there while
+    # reporting an intact anchor.
+    if ledger is not None:
+        paths["ledger"] = Path(ledger)
     targets = [p for p in paths.values() if p.exists()]
 
     if commit:
@@ -283,14 +290,16 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     for role, rec in entries.items():
         commit, rel = rec.get("commit", ""), rec.get("path", "")
         blob = _blob(commit, rel, repo)
-        # An unknown role is resolved from the path the anchor itself names
-        # rather than skipped, so a record carrying more than these three
-        # roles is checked rather than waved through.
-        disk = paths.get(role) or (repo / rel)
+        # Resolved from the path the anchor RECORDS, not from a filename
+        # convention — the ledger may be named anything, and an unknown
+        # role must be checked rather than waved through. The registration
+        # is the exception: it is the file the caller handed us, and
+        # verifying a different one would answer a question nobody asked.
+        disk = reg if role == "registration" else (repo / rel)
         disk_bytes = disk.read_bytes() if disk.exists() else None
         on_disk = _sha256(disk_bytes) if disk_bytes is not None else None
         state = {
-            "path": rel, "commit": commit,
+            "path": rel, "disk_path": str(disk), "commit": commit,
             "present": blob is not None,
             "committed_sha256": _sha256(blob) if blob is not None else None,
             "recorded_sha256": rec.get("sha256"),

@@ -281,6 +281,13 @@ covered still reads `intact` and says the ledger is uncovered, because
 marking every older record as tampered would teach a reader to ignore the
 word.
 
+Anchor the ledger **when the search finishes and before you spend the
+look**. Anchoring it later — with the stamp, say — records the right number
+in a commit carrying no evidence that it predates the result, and ordering
+is the only thing an anchor attests. Pass `--ledger` if it is not named
+after the registration; coverage by filename convention fails silently when
+the convention does not hold.
+
 ---
 
 ### The deflation cheat sheet
