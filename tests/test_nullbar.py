@@ -1257,52 +1257,49 @@ class TestTheLockGuaranteeIsNeverSilentlyDropped:
         led.record("s", {"q": 1})
         assert led.count() == 1
 
-    def test_two_concurrent_freezes_of_different_designs(self, tmp_path):
-        """``exists()``-then-write is two steps. Two callers freezing
+    def test_freeze_creates_exclusively(self, tmp_path):
+        """``exists()``-then-write is two steps, so two callers freezing
         DIFFERENT designs at one path could both find nothing and both
-        write, and the second silently overwrote the first — losing the
+        write, the second silently overwriting the first and losing the
         refusal freeze() exists to make.
+
+        Asserted STRUCTURALLY rather than by racing two threads. The
+        threaded version of this test patched a shared class attribute from
+        both threads, so one thread's ``__exit__`` restored the original
+        while the other was still inside — it passed here and failed in CI
+        with a BrokenBarrierError. A flaky test is worse than no test.
         """
-        import threading
+        modes = []
+        real = Path.open
+
+        def watched(self, mode="r", *a, **k):
+            if self == tmp_path / "reg.json":
+                modes.append(mode)
+            return real(self, mode, *a, **k)
+
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        with mock.patch.object(Path, "open", watched):
+            reg.freeze(tmp_path / "reg.json")
+        assert "x" in modes, f"freeze did not create exclusively: {modes}"
+
+    def test_the_loser_of_the_race_is_refused(self, tmp_path):
+        """What the losing caller experiences, deterministically: the file
+        now exists and holds a different promise, so it is refused —
+        exactly the answer it would have got had it arrived second."""
         p = tmp_path / "reg.json"
-        gate, wrote, refused = threading.Barrier(2), [], []
-
-        def _freeze(value):
-            reg = nullbar.Registration(
-                name=f"design-{value}", hypothesis="h", design={"v": value},
-                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
-                cells_budget=1)
-            real = Path.exists
-            waited = []
-
-            def at_the_same_moment(self):
-                out = real(self)
-                # ONCE only: the loser retries through freeze(), and a
-                # second wait on a cyclic barrier with nobody to meet
-                # blocks until it breaks — which would kill the thread and
-                # make this test pass for the wrong reason
-                if self == p and not waited:
-                    waited.append(True)
-                    gate.wait(timeout=5)      # both see "no file"
-                return out
-
-            with mock.patch.object(Path, "exists", at_the_same_moment):
-                try:
-                    reg.freeze(p)
-                    wrote.append(value)
-                except FileExistsError:
-                    refused.append(value)
-
-        threads = [threading.Thread(target=_freeze, args=(v,))
-                   for v in ("a", "b")]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
-        assert len(wrote) == 1 and len(refused) == 1, (wrote, refused)
-        # and the file holds the winner, not a torn merge of both
-        doc = json.loads(p.read_text())
-        assert doc["design"]["v"] == wrote[0]
+        nullbar.Registration(
+            name="first", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        with pytest.raises(FileExistsError, match="do not edit history"):
+            nullbar.Registration(
+                name="second", hypothesis="h", design={"v": 2},
+                bar={"t": {"metric": "t", "op": ">=", "value": 9.0}},
+                cells_budget=1).freeze(p)
+        assert json.loads(p.read_text())["design"]["v"] == 1
 
     def test_refreezing_an_identical_design_is_still_accepted(self, tmp_path):
         # the retry path must not turn idempotence into a refusal
