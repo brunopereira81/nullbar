@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -100,6 +102,47 @@ def _condition_state(value: Any) -> str:
         # singleton, which is exactly how a failing bar reads as PASS.
         return "true" if bool(value) else "false"
     return "invalid"
+
+
+def _publish_atomically(path: Path, payload: str) -> None:
+    """Create ``path`` holding ``payload``, atomically and exclusively.
+
+    ``open("x")`` gives exclusivity and NOT atomicity: the final path
+    becomes visible the moment it is created, before a byte is written, so
+    a concurrent reader sees an empty file where a registration should be
+    and JSONDecodeError comes out of code that was deciding whether to
+    accept a competing design.
+
+    Both properties are needed, and ``os.link`` is the primitive that has
+    both: the content is written to a temporary file in the SAME directory
+    first, and linking publishes it under the real name in one step that
+    fails outright if the name is taken. A reader therefore sees the path
+    either absent or complete, never in between.
+
+    Where hard links are unavailable the exclusive create is used instead
+    — exclusivity is the property that protects the frozen record, and
+    losing atomicity narrows to a race that needs two processes freezing
+    the same path at once.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                    prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp_name, str(path))
+        except (AttributeError, NotImplementedError, PermissionError,
+                OSError) as exc:
+            if isinstance(exc, FileExistsError):
+                raise                      # the name is taken: the caller
+                                           # decides, and that is the point
+            with path.open("x") as fh:     # pragma: no cover - no hardlinks
+                fh.write(payload)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class Registration:
@@ -198,7 +241,28 @@ class Registration:
         if p.exists():
             old = record_text(p, "registration")
             if hashlib.sha256(old.encode()).hexdigest() != digest:
-                old_doc = json.loads(old)
+                # An unreadable file at this path is not a competing
+                # design, and JSONDecodeError out of the code deciding
+                # whether to accept one explains nothing. A concurrent
+                # writer can no longer leave a partial file here, but a
+                # crash, a `touch`, or a record written by something else
+                # still can.
+                try:
+                    old_doc = json.loads(old)
+                except ValueError as exc:
+                    raise FileExistsError(
+                        f"{p} exists but does not hold a readable "
+                        f"registration ({exc}) — move it aside; nullbar "
+                        "will not overwrite a file it cannot read") from None
+                if not isinstance(old_doc, dict):
+                    # `null` and `[]` PARSE. Valid JSON that is not a
+                    # registration reached _promise() and came out as
+                    # AttributeError on .items(), which is the same
+                    # unexplained crash one shape further along.
+                    raise FileExistsError(
+                        f"{p} exists and holds valid JSON that is not a "
+                        f"registration ({type(old_doc).__name__}) — move it "
+                        "aside; nullbar will not overwrite it")
                 if self._promise(old_doc) != self._promise(self.doc):
                     raise FileExistsError(
                         f"{p} already holds a different frozen registration "
@@ -220,8 +284,7 @@ class Registration:
             # different one is refused, which is the answer either caller
             # would have got had they arrived second.
             try:
-                with p.open("x") as fh:
-                    fh.write(payload)
+                _publish_atomically(p, payload)
             except FileExistsError:
                 # Someone won the race between the exists() above and here.
                 # Re-enter ONCE, not recursively: the first version called

@@ -20,6 +20,19 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **A half-written registration was visible under its final name.**
+  `open("x")` gives exclusivity and NOT atomicity: the name appears the
+  moment it is created, before a byte is written, so a concurrent `freeze()`
+  read an empty file and `JSONDecodeError` came out of the code deciding
+  whether to accept a competing design. Content is written to a temporary
+  file in the same directory and published with `os.link`, the one
+  primitive that is both atomic and exclusive — a reader sees the path
+  either absent or complete, never in between. (Introduced by the
+  exclusive-creation fix below, in the same release.) Probing it turned up
+  the same leak from a second direction and a third: a file a crash or a
+  `touch` left behind, and valid JSON that is not a registration (`null`,
+  `[]`) which parsed and then died on `.items()`. Both are refused by name
+  now — nullbar will not overwrite a file it cannot read.
 - **A dangling symlink recursed until the stack ran out.** `exists()`
   FOLLOWS the link and is False, so control reached the exclusive create —
   which fails, because the link itself is very much there — and the retry

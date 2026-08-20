@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -1269,21 +1270,28 @@ class TestTheLockGuaranteeIsNeverSilentlyDropped:
         while the other was still inside — it passed here and failed in CI
         with a BrokenBarrierError. A flaky test is worse than no test.
         """
-        modes = []
-        real = Path.open
+        # os.link is the primitive that is BOTH atomic and exclusive; the
+        # property asserted here is exclusivity, and the mechanism moved
+        # from open("x") to link() when atomicity was added.
+        linked = []
+        real_link = os.link
 
-        def watched(self, mode="r", *a, **k):
-            if self == tmp_path / "reg.json":
-                modes.append(mode)
-            return real(self, mode, *a, **k)
+        def watched(src, dst, *a, **k):
+            linked.append(str(dst))
+            return real_link(src, dst, *a, **k)
 
+        p = tmp_path / "reg.json"
         reg = nullbar.Registration(
             name="x", hypothesis="h", design={"v": 1},
             bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
             cells_budget=1)
-        with mock.patch.object(Path, "open", watched):
-            reg.freeze(tmp_path / "reg.json")
-        assert "x" in modes, f"freeze did not create exclusively: {modes}"
+        with mock.patch.object(os, "link", watched):
+            reg.freeze(p)
+        assert str(p) in linked, f"freeze did not publish by link: {linked}"
+        # and the primitive really is exclusive: a second link to a taken
+        # name fails rather than overwriting
+        with pytest.raises(FileExistsError):
+            os.link(__file__, str(p))
 
     def test_the_loser_of_the_race_is_refused(self, tmp_path):
         """What the losing caller experiences, deterministically: the file
@@ -1366,13 +1374,79 @@ class TestThePublicSurface:
             name="x", hypothesis="h", design={"v": 1},
             bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
             cells_budget=1)
-        real = Path.open
+        def always_taken(src, dst, *a, **k):
+            raise FileExistsError(dst)
 
-        def always_taken(self, mode="r", *a, **k):
-            if mode == "x" and self == p:
-                raise FileExistsError(p)
-            return real(self, mode, *a, **k)
-
-        with mock.patch.object(Path, "open", always_taken):
+        # publication always fails while the name never appears: the only
+        # honest outcome is to report, and the first version recursed
+        with mock.patch.object(os, "link", always_taken):
             with pytest.raises(FileExistsError, match="cannot be created"):
                 reg.freeze(p)
+
+    def test_the_final_path_is_never_visible_half_written(self, tmp_path):
+        """``open("x")`` gives exclusivity and NOT atomicity: the name
+        appears the moment it is created, before a byte is written, so a
+        concurrent reader saw an empty file where a registration should be
+        and JSONDecodeError came out of the code deciding whether to accept
+        a competing design.
+
+        Asserted at the publication step rather than by racing threads —
+        the threaded version of an earlier test patched a shared class
+        attribute from both threads and was flaky in CI.
+        """
+        p = tmp_path / "reg.json"
+        seen = {}
+        real_link = os.link
+
+        def watched(src, dst, *a, **k):
+            # at the moment of publication: the real name must not exist,
+            # and the source must already hold the whole document
+            seen["dst_existed"] = Path(dst).exists()
+            seen["src_payload"] = Path(src).read_text()
+            return real_link(src, dst, *a, **k)
+
+        with mock.patch.object(os, "link", watched):
+            nullbar.Registration(
+                name="x", hypothesis="h", design={"v": 1},
+                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+                cells_budget=1).freeze(p)
+
+        assert seen["dst_existed"] is False
+        assert json.loads(seen["src_payload"])["design"]["v"] == 1
+        assert json.loads(p.read_text())["design"]["v"] == 1
+
+    def test_no_temporary_file_is_left_behind(self, tmp_path):
+        p = tmp_path / "reg.json"
+        nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        assert [f.name for f in tmp_path.iterdir()] == ["reg.json"]
+
+    def test_the_temp_file_is_cleaned_up_when_publication_fails(self,
+                                                                tmp_path):
+        p = tmp_path / "reg.json"
+        nullbar.Registration(
+            name="first", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        with pytest.raises(FileExistsError):
+            nullbar.Registration(
+                name="second", hypothesis="h", design={"v": 2},
+                bar={"t": {"metric": "t", "op": ">=", "value": 9.0}},
+                cells_budget=1).freeze(p)
+        assert [f.name for f in tmp_path.iterdir()] == ["reg.json"]
+
+    @pytest.mark.parametrize("junk", ["", "{not json", "null", "[]"])
+    def test_an_unreadable_existing_file_is_refused_clearly(self, tmp_path,
+                                                            junk):
+        # a concurrent writer can no longer leave one, but a crash, a
+        # `touch`, or a file written by something else still can
+        p = tmp_path / "reg.json"
+        p.write_text(junk)
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        with pytest.raises(FileExistsError):
+            reg.freeze(p)
