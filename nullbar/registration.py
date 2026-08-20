@@ -198,7 +198,21 @@ class Registration:
                 digest = hashlib.sha256(old.encode()).hexdigest()
         else:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(payload)
+            # EXCLUSIVE creation, for the reason spend_test_look uses it:
+            # exists()-then-write is two steps, so two callers freezing
+            # DIFFERENT designs at the same path could both find nothing
+            # and both write, and the second would silently overwrite the
+            # first — losing exactly the refusal this method exists to
+            # make ("a frozen design does not get edited"). Losing the
+            # race means the file now exists, so re-enter the branch above
+            # and let it judge: an identical promise is accepted, a
+            # different one is refused, which is the answer either caller
+            # would have got had they arrived second.
+            try:
+                with p.open("x") as fh:
+                    fh.write(payload)
+            except FileExistsError:
+                return self.freeze(p)
         self.path, self.sha256 = p, digest
         return digest
 

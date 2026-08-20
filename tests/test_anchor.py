@@ -1129,3 +1129,99 @@ class TestTheCLIAnswersInsteadOfCrashing:
             with mock.patch.dict(_sys.modules):
                 assert cli.main(["verify", str(p)]) == 2
         assert "could not check the anchor" in capsys.readouterr().err
+
+
+class TestVerifyAnchorNeverRaises:
+    """Its contract is to RETURN one of four statuses. ``git log`` fails on
+    an unborn HEAD — a repository with everything staged and nothing
+    committed — and that GitError escaped, reaching ``nullbar report`` as a
+    traceback because GitError is a RuntimeError and that command catches
+    ValueError and OSError.
+
+    Guarded at the source rather than at each caller: `verify` had been
+    given its own catch and `report` had not, which is the same
+    fix-the-instance failure the rest of this file documents.
+    """
+
+    def _unborn(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0})
+        (tmp_path / "r.anchor.json").write_text(json.dumps(
+            {"kind": "git", "entries": {"registration": {"commit": "HEAD",
+                                                         "path": "r.json"}}}))
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        return p                      # staged; HEAD is unborn
+
+    def test_an_unborn_head_returns_a_status(self, tmp_path):
+        out = verify_anchor(self._unborn(tmp_path))     # must not raise
+        assert out["status"] in ("broken", "unverifiable"), out
+
+    def test_report_does_not_traceback_on_it(self, tmp_path, capsys):
+        p = self._unborn(tmp_path)
+        rc = cli.main(["report", str(p), "-o", str(tmp_path / "o.html")])
+        assert rc == 1                                  # a verdict, not a crash
+        assert "Traceback" not in capsys.readouterr().err
+
+    def test_last_commit_maps_a_git_failure_to_none(self, tmp_path):
+        import sys as _sys
+        A = _sys.modules["nullbar.anchor"]
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        assert A._last_commit("nothing-here.txt", tmp_path) is None
+
+    def test_report_prints_a_runtime_error_instead_of_raising(self, tmp_path,
+                                                              capsys):
+        # the belt to the source fix's braces: any future RuntimeError out
+        # of report_data must still print rather than crash
+        # cli._report does `from .report import report_data` INSIDE the
+        # function, so patching the module attribute is what reaches it.
+        import nullbar.report as R
+        p = tmp_path / "r.json"
+        p.write_text("{}")
+        with mock.patch.object(R, "report_data",
+                               side_effect=nullbar.GitError("boom")):
+            rc = cli.main(["report", str(p)])
+        assert rc == 2
+        assert "cannot assemble the record" in capsys.readouterr().err
+
+
+class TestAJunkCommittedEntrySaysSo:
+    """The move-detection compares the working sidecar against its COMMITTED
+    copy. When the committed copy's entry is unreadable that comparison
+    cannot run — and it used to skip in silence, which reads exactly like
+    the check passing."""
+
+    def test_it_is_reported_as_a_note(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+
+        side = tmp_path / "r.anchor.json"
+        # COMMIT a junk entry...
+        side.write_text(json.dumps({"kind": "git",
+                                    "entries": {"registration": []}}))
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "junk"], cwd=tmp_path,
+                       check=True)
+        # ...then put a VALID one in the working tree, so the malformed
+        # check above passes and the comparison below is the thing reached
+        nullbar.anchor(p)
+
+        out = verify_anchor(p)
+        assert any("is not readable, so a move of that entry cannot be "
+                   "detected" in n for n in out["notes"]), out["notes"]

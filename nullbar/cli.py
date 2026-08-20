@@ -38,6 +38,8 @@ def _report(argv: list[str]) -> int:
     from .report import report_data
     from .report_html import render_html
 
+    from .anchor import GitError
+    from .ledger import UnlockablePlatformError
     try:
         data = report_data(args.registration, args.ledger, sims=args.sims,
                            seed=args.seed)
@@ -46,6 +48,14 @@ def _report(argv: list[str]) -> int:
         return 2
     except (ValueError, OSError) as exc:
         print(f"nullbar report: cannot read the record: {exc}",
+              file=sys.stderr)
+        return 2
+    except (GitError, UnlockablePlatformError) as exc:
+        # Both are RuntimeErrors and slipped straight past the clause
+        # above. `verify_anchor` is not supposed to raise at all and no
+        # longer does, but a report that crashes instead of printing is
+        # the failure mode this whole command exists to avoid.
+        print(f"nullbar report: cannot assemble the record: {exc}",
               file=sys.stderr)
         return 2
 

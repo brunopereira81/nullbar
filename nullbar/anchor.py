@@ -126,7 +126,23 @@ def _blob(commit: str, rel: str, repo: Path) -> bytes | None:
 
 
 def _last_commit(rel: str, repo: Path) -> str | None:
-    out = _git(["log", "-1", "--format=%H", "--", rel], repo)
+    """The last commit touching ``rel``, or None if there is none.
+
+    A GitError is None, not an exception. ``git log`` FAILS on an unborn
+    HEAD — a repository with everything staged and nothing committed yet —
+    and that error escaped ``verify_anchor``, whose entire contract is to
+    return one of four statuses. It reached ``nullbar report`` as a
+    traceback, because GitError is a RuntimeError and that command catches
+    ValueError and OSError.
+
+    Mapping it to None is not a shrug: "git cannot name a commit for this
+    path" and "there is no commit for this path" are the same fact to
+    everything downstream, which already treats None as "not committed".
+    """
+    try:
+        out = _git(["log", "-1", "--format=%H", "--", rel], repo)
+    except GitError:
+        return None
     return out or None
 
 
@@ -562,7 +578,16 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             for role, before in was.items():
                 now = entries.get(role) if isinstance(entries, dict) else None
                 if not isinstance(before, dict):
-                    continue                  # the COMMITTED copy is junk
+                    # The COMMITTED copy's entry is unreadable, so a move
+                    # cannot be detected for this role. Silence here would
+                    # be the same shape as every other defect in this file:
+                    # the check does not run and nothing says so, which
+                    # reads exactly like the check passing.
+                    out["notes"].append(
+                        f"the committed anchor record's {role} entry is not "
+                        "readable, so a move of that entry cannot be "
+                        "detected from here")
+                    continue
                 if not isinstance(now, dict):
                     # DELETION. An entry the committed sidecar attests to,
                     # gone from the working copy, is the cheapest tamper of

@@ -18,7 +18,8 @@ believe a number: the NULL control and the pre-registered BAR.
 """
 __version__ = "0.7.1"
 
-from .ledger import TrialLedger
+from ._records import RecordReadError
+from .ledger import TrialLedger, UnlockablePlatformError
 from .registration import (AlreadySpentError, AmbiguousConditionError,
                            BarMismatchError, Registration, SealBrokenError,
                            spec_text)
@@ -34,6 +35,12 @@ from .report import evidence, report_data
 from .report_html import render_html
 
 __all__ = [
+    # A caller that wants to CATCH a refusal needs to be able to name it.
+    # Both of these are new in 0.7.1 and both are named in the changelog;
+    # neither was importable from the package, so `except
+    # nullbar.RecordReadError` raised AttributeError and the only way in
+    # was a private module.
+    "RecordReadError", "UnlockablePlatformError",
     "TrialLedger", "Registration", "AlreadySpentError", "SealBrokenError",
     "AmbiguousConditionError", "BarMismatchError", "spec_text",
     "clustered_t", "sharpe", "psr", "dsr", "expected_max_sharpe",

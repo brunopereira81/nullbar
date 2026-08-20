@@ -1256,3 +1256,78 @@ class TestTheLockGuaranteeIsNeverSilentlyDropped:
         led = nullbar.TrialLedger(tmp_path / "fresh.jsonl")
         led.record("s", {"q": 1})
         assert led.count() == 1
+
+    def test_two_concurrent_freezes_of_different_designs(self, tmp_path):
+        """``exists()``-then-write is two steps. Two callers freezing
+        DIFFERENT designs at one path could both find nothing and both
+        write, and the second silently overwrote the first — losing the
+        refusal freeze() exists to make.
+        """
+        import threading
+        p = tmp_path / "reg.json"
+        gate, wrote, refused = threading.Barrier(2), [], []
+
+        def _freeze(value):
+            reg = nullbar.Registration(
+                name=f"design-{value}", hypothesis="h", design={"v": value},
+                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+                cells_budget=1)
+            real = Path.exists
+            waited = []
+
+            def at_the_same_moment(self):
+                out = real(self)
+                # ONCE only: the loser retries through freeze(), and a
+                # second wait on a cyclic barrier with nobody to meet
+                # blocks until it breaks — which would kill the thread and
+                # make this test pass for the wrong reason
+                if self == p and not waited:
+                    waited.append(True)
+                    gate.wait(timeout=5)      # both see "no file"
+                return out
+
+            with mock.patch.object(Path, "exists", at_the_same_moment):
+                try:
+                    reg.freeze(p)
+                    wrote.append(value)
+                except FileExistsError:
+                    refused.append(value)
+
+        threads = [threading.Thread(target=_freeze, args=(v,))
+                   for v in ("a", "b")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(wrote) == 1 and len(refused) == 1, (wrote, refused)
+        # and the file holds the winner, not a torn merge of both
+        doc = json.loads(p.read_text())
+        assert doc["design"]["v"] == wrote[0]
+
+    def test_refreezing_an_identical_design_is_still_accepted(self, tmp_path):
+        # the retry path must not turn idempotence into a refusal
+        p = tmp_path / "reg.json"
+        for _ in range(2):
+            nullbar.Registration(
+                name="same", hypothesis="h", design={"v": 1},
+                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+                cells_budget=1).freeze(p)
+        assert json.loads(p.read_text())["design"]["v"] == 1
+
+
+class TestThePublicSurface:
+    """A caller that wants to CATCH a refusal must be able to name it."""
+
+    @pytest.mark.parametrize("name", ["RecordReadError",
+                                      "UnlockablePlatformError"])
+    def test_the_new_exceptions_are_importable(self, name):
+        assert hasattr(nullbar, name), f"nullbar.{name} is not exported"
+        assert name in nullbar.__all__
+
+    def test_record_read_error_is_still_an_oserror(self):
+        # existing handlers catch OSError; narrowing that would turn a
+        # handled refusal into an unhandled crash for every current caller
+        assert issubclass(nullbar.RecordReadError, OSError)
+
+    def test_everything_in_all_actually_exists(self):
+        assert [n for n in nullbar.__all__ if not hasattr(nullbar, n)] == []

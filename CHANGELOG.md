@@ -9,6 +9,32 @@ machine down with it.
 
 ### Fixed
 
+- **`verify_anchor` raised instead of returning a status.** Its whole
+  contract is one of four verdicts, and `git log` FAILS on an unborn HEAD —
+  a repository with everything staged and nothing committed — so a GitError
+  escaped it and reached `nullbar report` as a traceback, because GitError
+  is a `RuntimeError` and that command catches `ValueError` and `OSError`.
+  Fixed at the source (`_last_commit` maps a git failure to None, which is
+  what everything downstream already means by "not committed") rather than
+  at each caller: `verify` had been given its own catch and `report` had
+  not, which is the same fix-the-instance failure as the entries before the
+  sidecar and the loop before the self-check. `nullbar report` catches the
+  RuntimeErrors too, as a backstop.
+- **`freeze()` could lose the refusal it exists to make.** `exists()`-then-
+  write is two steps, so two callers freezing DIFFERENT designs at one path
+  could both find nothing and both write, the second silently overwriting
+  the first. Exclusive creation, and the loser re-enters the existing
+  branch — an identical promise is accepted, a different one refused, which
+  is the answer either caller would have got had it arrived second.
+- **The new exceptions were not importable.** `RecordReadError` and
+  `UnlockablePlatformError` are both introduced here and both named in this
+  changelog, and `except nullbar.RecordReadError` raised `AttributeError`:
+  the only way in was a private module. Exported, with a test that every
+  name in `__all__` resolves.
+- **A junk entry in the COMMITTED sidecar went silent.** Move-detection
+  compares the working record against its committed copy; when that copy's
+  entry is unreadable the comparison cannot run, and skipping without
+  saying so reads exactly like the check passing.
 - **A staged sidecar reported `intact` with nothing said.** `git ls-files`
   counts a STAGED file, so a freshly `git add`ed anchor record passed the
   tracked check while `_last_commit` returned None — the self-check was
