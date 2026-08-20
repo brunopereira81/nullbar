@@ -196,9 +196,16 @@ Spending the look on a bare result is the common mistake — this library's
 own demo did it, and the stamp then could not re-derive two of its three
 conditions. What is not in the payload is not in the report, and the report
 says so out loud: a missing piece is listed under *What this record does not
-contain*, the verdict degrades to **INCOMPLETE**, and `nullbar report` exits
-non-zero. An incomplete record must never be indistinguishable from a
-passing one — least of all in CI.
+contain*.
+
+Gaps the verdict **depends on** degrade it to **INCOMPLETE**, and
+`nullbar report` exits non-zero — a claimed multi-cell search with no trial
+ledger is the case, because the deflation the bar was set against cannot be
+computed at all. Gaps that do not bear on the verdict are printed and do not
+block it: a single-cell registration needs no ledger, and demanding an
+anchor would put PASS out of reach for anyone not using git. An incomplete
+record must never be indistinguishable from a passing one — least of all in
+CI.
 
 Four statuses, and only one of them is good news:
 
@@ -260,6 +267,19 @@ Read the limits as carefully as the guarantees:
 
 Both commits also carry the anchor record itself (`*.anchor.json`), because
 untracked it would be invisible to the clone a reader actually checks.
+
+**The trial ledger is anchored too**, and for the same reason the bar is:
+the two things a reader has to be able to trust are the bar and the number
+of cells it was set against. Left uncovered, a ledger can be quietly
+*shrunk* — the budget check then passes against a search that never
+happened, every deflation figure is divided by a smaller number, and nothing
+else in the record disagrees. The ledger is append-only by design, so it is
+checked as a **prefix** rather than for byte equality: rows may be added,
+never edited or removed. Recording another trial keeps the anchor intact;
+rewriting or deleting one breaks it. A record anchored before ledgers were
+covered still reads `intact` and says the ledger is uncovered, because
+marking every older record as tampered would teach a reader to ignore the
+word.
 
 ---
 

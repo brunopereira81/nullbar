@@ -41,6 +41,22 @@ from typing import Any
 
 ANCHOR_SUFFIX = ".anchor.json"
 
+#: Roles an anchor covers, and where each lives relative to the
+#: registration. The LEDGER is here because the two things a reader must be
+#: able to trust are the bar and the number of cells it was set against, and
+#: the ledger carries the second. Left out, a ledger can be quietly SHRUNK:
+#: the budget check then passes against a search that never happened, and
+#: nothing in the record disagrees.
+ROLE_SUFFIXES = {"registration": None,
+                 "test_look": ".test_look.json",
+                 "ledger": ".jsonl"}
+
+
+def role_paths(reg: Path) -> dict[str, Path]:
+    """Where each anchored role lives, for a given registration."""
+    return {role: (reg if suffix is None else reg.with_suffix(suffix))
+            for role, suffix in ROLE_SUFFIXES.items()}
+
 
 class GitError(RuntimeError):
     """A git invocation failed, or there is no repository here."""
@@ -130,8 +146,8 @@ def anchor(reg_path: str | Path, *, commit: bool = False,
     if not reg.exists():
         raise FileNotFoundError(f"no registration at {reg}")
     repo = _toplevel(reg)
-    stamp = reg.with_suffix(".test_look.json")
-    targets = [reg] + ([stamp] if stamp.exists() else [])
+    paths = role_paths(reg)
+    targets = [p for p in paths.values() if p.exists()]
 
     if commit:
         _commit(repo, targets, message or f"anchor: {reg.name}")
@@ -143,8 +159,24 @@ def anchor(reg_path: str | Path, *, commit: bool = False,
         "remotes": dict(_remote_pairs(repo)),
         "entries": {"registration": _entry(reg, repo)},
     }
-    if stamp.exists():
-        doc["entries"]["test_look"] = _entry(stamp, repo)
+    uncovered: list[str] = []
+    for role in ("test_look", "ledger"):
+        path = paths[role]
+        if not path.exists():
+            continue
+        try:
+            doc["entries"][role] = _entry(path, repo)
+        except GitError as exc:
+            # A file that exists but is not committed cannot be anchored,
+            # and refusing the whole anchor over it would leave the
+            # registration unanchored too. Record the hole instead of
+            # skipping quietly: verification reads this back as a finding,
+            # so "not covered" can never be mistaken for "nothing to cover".
+            if role == "test_look":
+                raise
+            uncovered.append(f"{role}: {exc}")
+    if uncovered:
+        doc["uncovered"] = uncovered
     out = reg.with_suffix(ANCHOR_SUFFIX)
     out.write_text(json.dumps(doc, indent=2))
     if commit:
@@ -247,12 +279,16 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
         return out
 
     broken = False
+    paths = role_paths(reg)
     for role, rec in entries.items():
         commit, rel = rec.get("commit", ""), rec.get("path", "")
         blob = _blob(commit, rel, repo)
-        disk = (reg if role == "registration"
-                else reg.with_suffix(".test_look.json"))
-        on_disk = _sha256(disk.read_bytes()) if disk.exists() else None
+        # An unknown role is resolved from the path the anchor itself names
+        # rather than skipped, so a record carrying more than these three
+        # roles is checked rather than waved through.
+        disk = paths.get(role) or (repo / rel)
+        disk_bytes = disk.read_bytes() if disk.exists() else None
+        on_disk = _sha256(disk_bytes) if disk_bytes is not None else None
         state = {
             "path": rel, "commit": commit,
             "present": blob is not None,
@@ -274,11 +310,34 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             out["findings"].append(
                 f"the {role} was anchored in {commit[:12]}… but {rel} is no "
                 "longer on disk")
-        elif state["committed_sha256"] != on_disk:
+        elif role == "ledger" and not disk_bytes.startswith(blob):
+            # The ledger is append-only BY DESIGN — "if a trial was run, it
+            # counts" — so demanding byte equality would break the moment
+            # another cell is recorded, and the check would be turned off.
+            # Prefix containment is the invariant that actually holds: rows
+            # may be added, never edited or removed. That is precisely the
+            # tamper this entry exists to catch, since shrinking a ledger
+            # shrinks the deflation every figure downstream is divided by.
+            broken = True
+            out["findings"].append(
+                "the trial ledger on disk is not an extension of the one "
+                f"committed in {commit[:12]}… — an append-only record was "
+                "rewritten, so trials were edited or removed")
+        elif role != "ledger" and state["committed_sha256"] != on_disk:
             broken = True
             out["findings"].append(
                 f"the {role} on disk is not the {role} that was committed "
                 f"in {commit[:12]}…")
+        elif (isinstance(state["recorded_sha256"], str)
+              and state["recorded_sha256"] != state["committed_sha256"]):
+            # The sidecar names a commit AND the hash of what that commit
+            # was supposed to hold. Re-pointing an entry at a different
+            # commit — an older ledger, say — leaves the two disagreeing.
+            broken = True
+            out["findings"].append(
+                f"the {role} entry names commit {commit[:12]}… but records "
+                "a different sha256 than that commit holds — the anchor was "
+                "edited to point somewhere else")
         elif not state["in_history"]:
             broken = True
             out["findings"].append(
@@ -309,11 +368,69 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     elif reg_c:
         out["notes"].append("no test look is anchored yet")
 
-    if not _ok(["ls-files", "--error-unmatch", "--",
-                side.resolve().relative_to(repo.resolve()).as_posix()], repo):
+    # ── the trial ledger ────────────────────────────────────────────────
+    for hole in doc.get("uncovered") or []:
+        out["findings"].append(
+            f"the anchor could not cover the {hole} — that part of the "
+            "record is attested by nothing")
+    ledger = paths["ledger"]
+    if "ledger" not in entries and ledger.exists():
+        # NOT broken: every record anchored before the ledger was covered
+        # would read as tampered, which is false and would teach a reader to
+        # ignore the word. It is a hole, and a hole gets said out loud.
+        out["notes"].append(
+            "the trial ledger is not covered by this anchor: the number of "
+            "cells the search spent is attested by nothing, and a ledger "
+            "can be shrunk without contradicting any other part of the "
+            "record (re-run `nullbar anchor` to cover it)")
+
+    # ── the sidecar itself ──────────────────────────────────────────────
+    side_rel = side.resolve().relative_to(repo.resolve()).as_posix()
+    if not _ok(["ls-files", "--error-unmatch", "--", side_rel], repo):
         out["notes"].append(
             "the anchor record itself is not committed, so a clone of this "
             "repository carries no anchor to check")
+    else:
+        side_commit = _last_commit(side_rel, repo)
+        side_blob = _blob(side_commit, side_rel, repo) if side_commit else None
+        if side_blob is not None and side_blob != side.read_bytes():
+            # Every claim above was read out of the working-tree sidecar,
+            # which is the one file an editor can reach. Re-anchoring
+            # legitimately rewrites it — but re-anchoring only ADDS roles or
+            # moves one FORWARD to a newer commit. An entry pointed at a
+            # commit that is not a descendant of the committed one is the
+            # last step of the only tamper the checks above cannot see:
+            # shrink the ledger, then aim the entry at a commit where it was
+            # already that short.
+            try:
+                was = (json.loads(side_blob.decode()).get("entries") or {})
+            except (ValueError, UnicodeDecodeError):
+                was = {}
+            for role, before in was.items():
+                now = entries.get(role) if isinstance(entries, dict) else None
+                if not isinstance(before, dict) or not isinstance(now, dict):
+                    continue
+                a, b = before.get("commit"), now.get("commit")
+                if isinstance(a, str) and isinstance(b, str) and a != b \
+                        and not _ok(["merge-base", "--is-ancestor", a, b],
+                                    repo):
+                    broken = True
+                    out["findings"].append(
+                        f"the {role} entry was moved from commit {a[:12]}… "
+                        f"to {b[:12]}…, which is not a descendant of it — "
+                        "the anchor on disk points somewhere the committed "
+                        "anchor did not")
+            # A note, not a finding: re-anchoring legitimately rewrites the
+            # sidecar before it is committed, so this fires in normal use.
+            # It is worth saying anyway, because AFTER committing, a
+            # difference means the record was edited — and every claim on
+            # this page is read out of the file that differs.
+            out["notes"].append(
+                "the anchor record on disk differs from the copy committed "
+                f"in {side_commit[:12]}… — expected while re-anchoring and "
+                "before committing; afterwards it means the record was "
+                "edited, and the entries checked above were read from the "
+                "edited file")
     if not out["witnessed"]:
         out["notes"].append(
             "no remote-tracking ref contains these commits: nothing outside "

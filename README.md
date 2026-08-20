@@ -40,7 +40,7 @@ previously consumed months and produced numbers we later had to retract.
 | `evaluate` | Block-clustered evaluation, hold baseline, and null controls graded against it | Pipelines that "find" effects their own machinery created |
 | `fills` | Touch/through fill brackets for resting bids and asks | Assumed fills overstated executed gross 1.3–1.5× — the entries that never fill are the best ones |
 | `leaklint` | Static lookahead lint (CLI) + **prefix-replay check** (sound one way: it cannot see a leak baked into a constant fitted outside the callable) | A multi-timeframe resampling leak that fed +23h of future into features, survived two years and every review, and explained a deployed model's entire measured edge |
-| `anchor` | Git anchoring: which commits carry the registration and the stamp, whether the first precedes the second, and whether anyone outside this machine ever saw them | Timestamps a researcher writes with their own clock, in a record whose whole claim is that the bar came first |
+| `anchor` | Git anchoring: which commits carry the registration, the trial ledger and the stamp, whether the bar precedes the result, and whether anyone outside this machine ever saw them | Timestamps a researcher writes with their own clock, in a record whose whole claim is that the bar came first |
 | `report` | The whole record — registration, hash, ledger, null, result, fills, deflation, test look, graded bar — as one self-contained HTML page | Results that lived as `print()` calls, so what was promised and what was measured were never in the same artifact |
 
 The prefix-replay check deserves a sentence: recompute any feature on a data
@@ -147,7 +147,11 @@ honest.
 `nullbar anchor` closes the half of that a repository can. Anchor the
 registration before you run and the stamp after, and git holds the ordering:
 the bar's commit is an ancestor of the result's, and changing that means
-rewriting history that a push has already shown someone else. It still does
+rewriting history that a push has already shown someone else. The **trial
+ledger** is covered too — a bar nobody can move is worth little beside a
+cell count anybody can shrink — and because the ledger is append-only it is
+checked as a prefix: recording another trial keeps the anchor intact,
+rewriting or deleting one breaks it. It still does
 not prove wall-clock time — commit dates are self-reported — nor that you
 had not already seen the test window. For those, anchor the hash with an
 RFC-3161 timestamp or a transparency log, and have somebody else hold the

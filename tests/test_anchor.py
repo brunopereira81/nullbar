@@ -397,3 +397,197 @@ class TestMalformedAnchorRecords:
              "entries": {"registration": {"commit": "0" * 40,
                                           "path": "z.json"}}}))
         assert nullbar.verify_anchor(p)["status"] == "broken"
+
+
+class TestTheLedgerIsAnchoredToo:
+    """The bar and the number of cells it was set against are the two things
+    a reader must be able to trust. The ledger carries the second, and it
+    was the one file the anchor did not cover."""
+
+    def _repo(self, tmp_path, trials=4, budget=40):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=budget)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        led = nullbar.TrialLedger(tmp_path / "r.jsonl")
+        for i in range(trials):
+            led.record("s", {"q": i})
+        self._commit(tmp_path, ["r.json", "r.jsonl"], "freeze")
+        reg.spend_test_look(p, results={"t": 5.0})
+        self._commit(tmp_path, ["r.test_look.json"], "look")
+        nullbar.anchor(p)
+        self._commit(tmp_path, ["r.anchor.json"], "anchor")
+        return p
+
+    @staticmethod
+    def _commit(repo, rels, msg):
+        subprocess.run(["git", "add", *rels], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", msg], cwd=repo, check=True)
+
+    @staticmethod
+    def _head(repo):
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_the_ledger_is_among_the_anchored_entries(self, tmp_path):
+        p = self._repo(tmp_path)
+        entries = json.loads((tmp_path / "r.anchor.json").read_text())["entries"]
+        assert sorted(entries) == ["ledger", "registration", "test_look"]
+        assert verify_anchor(p)["status"] == "intact"
+
+    def test_a_shrunk_ledger_breaks_the_anchor(self, tmp_path):
+        # the whole point: shrinking a ledger shrinks the deflation every
+        # figure downstream is divided by, and nothing else in the record
+        # disagrees with it
+        p = self._repo(tmp_path)
+        led = tmp_path / "r.jsonl"
+        led.write_text(led.read_text().splitlines()[0] + "\n")
+        out = verify_anchor(p)
+        assert out["status"] == "broken"
+        assert any("append-only record was rewritten" in f
+                   for f in out["findings"])
+        assert report_data(p, led, sims=200)["verdict"]["status"] \
+            == "CONTRADICTED"
+
+    def test_an_edited_ledger_row_breaks_the_anchor(self, tmp_path):
+        # same row count, different content — a count check would miss it
+        p = self._repo(tmp_path)
+        led = tmp_path / "r.jsonl"
+        rows = led.read_text().splitlines()
+        rows[1] = json.dumps({"hash": "0" * 16, "name": "s",
+                              "params": {"q": 999}, "note": "", "metrics": {},
+                              "at": "2026-01-01T00:00:00+00:00"})
+        led.write_text("\n".join(rows) + "\n")
+        assert verify_anchor(p)["status"] == "broken"
+
+    def test_appending_a_trial_is_legitimate_and_stays_intact(self, tmp_path):
+        # append-only BY DESIGN — byte equality would break the moment
+        # another cell is recorded, and a check that breaks gets turned off
+        p = self._repo(tmp_path)
+        nullbar.TrialLedger(tmp_path / "r.jsonl").record("s", {"q": 4242})
+        assert verify_anchor(p)["status"] == "intact"
+
+    def test_re_anchoring_after_new_commits_stays_intact(self, tmp_path):
+        # the negative control for the backwards-move check: legitimate
+        # re-anchoring only ever moves an entry FORWARD
+        p = self._repo(tmp_path)
+        nullbar.TrialLedger(tmp_path / "r.jsonl").record("s", {"q": 4242})
+        self._commit(tmp_path, ["r.jsonl"], "one more trial")
+        nullbar.anchor(p)
+        assert verify_anchor(p)["status"] == "intact"
+
+    def test_re_pointing_the_ledger_entry_breaks_the_anchor(self, tmp_path):
+        """Aim the entry at a commit where the ledger was shorter, without
+        also forging the hash. The sidecar names a commit AND what that
+        commit was supposed to hold; re-pointing leaves the two disagreeing.
+        """
+        p = self._two_stage(tmp_path)
+        early = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
+                               cwd=tmp_path, capture_output=True,
+                               text=True).stdout.strip()
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        doc["entries"]["ledger"]["commit"] = early
+        side.write_text(json.dumps(doc, indent=2))
+        out = verify_anchor(p)
+        assert out["status"] == "broken"
+        assert any("records a different sha256" in f for f in out["findings"])
+
+    def _two_stage(self, tmp_path):
+        """A ledger that GREW across commits, so an earlier commit really
+        does hold a shorter one."""
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=40)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        led = nullbar.TrialLedger(tmp_path / "r.jsonl")
+        led.record("s", {"q": 0})
+        self._commit(tmp_path, ["r.json", "r.jsonl"], "freeze")
+        for i in range(1, 30):
+            led.record("s", {"q": i})
+        self._commit(tmp_path, ["r.jsonl"], "the search")
+        reg.spend_test_look(p, results={"t": 5.0})
+        self._commit(tmp_path, ["r.test_look.json"], "look")
+        nullbar.anchor(p)
+        self._commit(tmp_path, ["r.anchor.json"], "anchor")
+        return p
+
+    def test_the_full_tamper_chain_is_caught(self, tmp_path):
+        """Shrink the ledger, re-point its entry at the commit that held the
+        short version, and forge the recorded hash so the two agree. Every
+        per-entry check then passes; only the sidecar's own committed copy
+        contradicts it."""
+        import hashlib
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=40)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        led = nullbar.TrialLedger(tmp_path / "r.jsonl")
+        led.record("s", {"q": 0})
+        self._commit(tmp_path, ["r.json", "r.jsonl"], "freeze")
+        early, thin = self._head(tmp_path), (tmp_path / "r.jsonl").read_bytes()
+        for i in range(1, 30):
+            led.record("s", {"q": i})
+        self._commit(tmp_path, ["r.jsonl"], "the search")
+        reg.spend_test_look(p, results={"t": 5.0})
+        self._commit(tmp_path, ["r.test_look.json"], "look")
+        nullbar.anchor(p)
+        self._commit(tmp_path, ["r.anchor.json"], "anchor")
+        assert verify_anchor(p)["status"] == "intact"
+
+        (tmp_path / "r.jsonl").write_bytes(thin)
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        doc["entries"]["ledger"]["commit"] = early
+        doc["entries"]["ledger"]["sha256"] = hashlib.sha256(thin).hexdigest()
+        side.write_text(json.dumps(doc, indent=2))
+        out = verify_anchor(p)
+        assert out["status"] == "broken"
+        assert any("not a descendant" in f for f in out["findings"])
+
+    def test_a_record_anchored_before_ledgers_were_covered_is_not_broken(
+            self, tmp_path):
+        # every record anchored before this existed would otherwise read as
+        # tampered, which is false and teaches a reader to ignore the word
+        p = self._repo(tmp_path)
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        del doc["entries"]["ledger"]
+        side.write_text(json.dumps(doc, indent=2))
+        self._commit(tmp_path, ["r.anchor.json"], "as it was before")
+        out = verify_anchor(p)
+        assert out["status"] == "intact"
+        assert any("not covered by this anchor" in n for n in out["notes"])
+
+    def test_an_uncommitted_ledger_is_recorded_as_uncovered(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=4)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        nullbar.TrialLedger(tmp_path / "r.jsonl").record("s", {"q": 1})
+        self._commit(tmp_path, ["r.json"], "freeze")   # ledger NOT committed
+        doc = nullbar.anchor(p)
+        assert "ledger" not in doc["entries"]
+        assert any("ledger" in u for u in doc["uncovered"])
+        assert any("attested by nothing" in f
+                   for f in verify_anchor(p)["findings"])

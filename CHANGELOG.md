@@ -8,6 +8,28 @@ Eight ways a green PASS could be produced without the evidence to support
 it, or the check meant to catch it could fail to run at all. Each was
 reproduced before being fixed and mutation-checked after.
 
+### Added
+
+- **The anchor covers the trial ledger.** The two things a reader has to be
+  able to trust are the bar and the number of cells it was set against, and
+  only the first was attested. A ledger left outside the anchor can be
+  quietly *shrunk*: the budget check then passes against a search that never
+  happened, every deflation figure is divided by a smaller number, and
+  nothing else in the record disagrees — demonstrated by replacing a 2-row
+  ledger with one fabricated line and watching the anchor report `intact`
+  and the verdict stay `PASS`. Because the ledger is append-only by design
+  ("if a trial was run, it counts"), it is checked as a **prefix** rather
+  than for byte equality — demanding equality would break the moment another
+  cell is recorded, and a check that breaks gets turned off. Recording a
+  further trial keeps the anchor intact; rewriting or removing one breaks
+  it. Two further tampers now break it as well: an entry whose recorded
+  hash disagrees with the commit it names, and an entry moved to a commit
+  that is not a descendant of the one the *committed* sidecar named — which
+  is the last step of the only chain the per-entry checks cannot see.
+  Records anchored before this still read `intact`, with the uncovered
+  ledger stated as a note: marking every older record as tampered would
+  teach a reader to ignore the word.
+
 ### Fixed — the one look, the budget, and malformed records
 
 - **The one-look guard had a race.** `spend_test_look` asked whether the
