@@ -342,3 +342,58 @@ class TestAnAnchorMustAnchorSomething:
             {"entries": {"test_look": {"path": "x", "commit": "0" * 40,
                                        "sha256": "y"}}, "repo": str(repo)}))
         assert verify_anchor(path)["status"] == "unverifiable"
+
+
+class TestMalformedAnchorRecords:
+    """A record that cannot be read is unverifiable — never a traceback."""
+
+    def _repo(self, tmp_path):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        p = tmp_path / "z.json"
+        p.write_text(json.dumps(
+            {"name": "z", "hypothesis": "h", "design": {},
+             "bar": {"t": {"metric": "t", "op": ">=", "value": 3.0}},
+             "created_at": "2026-01-01T00:00:00+00:00", "cells_budget": 1}))
+        return p
+
+    @pytest.mark.parametrize("shape", [[], "abc", 7, None, {},
+                                       {"commit": 123},
+                                       {"commit": "abc"},
+                                       {"path": "z.json"}])
+    def test_a_malformed_entry_is_unverifiable_not_a_crash(self, tmp_path,
+                                                           shape):
+        # every entry is dereferenced with .get(); the empty-mapping fix
+        # asked whether entries EXIST and never what shape they are, so
+        # {"registration": []} raised AttributeError out of verification
+        # AND out of report generation with it
+        p = self._repo(tmp_path)
+        (tmp_path / "z.anchor.json").write_text(json.dumps(
+            {"kind": "git", "repo": str(tmp_path),
+             "entries": {"registration": shape}}))
+        out = nullbar.verify_anchor(p)
+        assert out["status"] == "unverifiable"
+        assert any("malformed" in f or "names no registration" in f
+                   for f in out["findings"])
+
+    def test_a_malformed_entry_does_not_crash_the_report(self, tmp_path):
+        p = self._repo(tmp_path)
+        reg = nullbar.Registration.load(p)
+        (tmp_path / "z.test_look.json").write_text(json.dumps(
+            {"at": "2026-02-01T00:00:00+00:00", "results": {"t": 5.0},
+             "registration_sha256": reg.seal_status(p)["sha256"]}))
+        (tmp_path / "z.anchor.json").write_text(json.dumps(
+            {"kind": "git", "repo": str(tmp_path),
+             "entries": {"registration": []}}))
+        data = nullbar.report_data(p, sims=200)
+        assert data["anchor"]["status"] == "unverifiable"
+
+    def test_a_well_formed_entry_naming_a_dead_commit_is_broken(self,
+                                                                tmp_path):
+        # the shape check must not swallow the check it guards
+        p = self._repo(tmp_path)
+        (tmp_path / "z.anchor.json").write_text(json.dumps(
+            {"kind": "git", "repo": str(tmp_path),
+             "entries": {"registration": {"commit": "0" * 40,
+                                          "path": "z.json"}}}))
+        assert nullbar.verify_anchor(p)["status"] == "broken"

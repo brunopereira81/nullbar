@@ -216,6 +216,25 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             "anchor can only be checked from a checkout that carries it")
         return out
 
+    if isinstance(entries, dict):
+        # Every entry is dereferenced with .get() below. The empty-mapping
+        # fix asked whether entries EXIST; it never asked what shape they
+        # are, so {"registration": []} raised AttributeError out of the
+        # verification path — and out of report generation with it. A
+        # record whose entries cannot be read is unverifiable, which is a
+        # verdict; a traceback is not.
+        malformed = [role for role, rec in entries.items()
+                     if not isinstance(rec, dict)
+                     or not isinstance(rec.get("commit"), str)
+                     or not isinstance(rec.get("path"), str)]
+        if malformed:
+            out["status"] = "unverifiable"
+            out["findings"].append(
+                "the anchor record is malformed: "
+                + ", ".join(f"the {role} entry does not name a commit and a "
+                            "path" for role in sorted(malformed)))
+            return out
+
     if not isinstance(entries, dict) or "registration" not in entries:
         # "intact" was returned for a sidecar naming nothing at all: the
         # loop below simply had no work, so every check passed vacuously.

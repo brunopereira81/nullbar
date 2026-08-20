@@ -4,11 +4,35 @@ All notable changes to this project. Dates are UTC.
 
 ## [0.7.0] — 2026-08-20
 
-Five ways a green PASS could be produced without the evidence to support it,
-found by review, each reproduced before being fixed and mutation-checked
-after.
+Eight ways a green PASS could be produced without the evidence to support
+it, or the check meant to catch it could fail to run at all. Each was
+reproduced before being fixed and mutation-checked after.
 
-### Fixed
+### Fixed — the one look, the budget, and malformed records
+
+- **The one-look guard had a race.** `spend_test_look` asked whether the
+  stamp existed and then wrote it, in two steps. Two callers could both
+  find no stamp and both succeed — forcing the interleaving produced two
+  looks, and neither caller could tell. Creation is now exclusive
+  (`open("x")`), so the question and the answer are one operation and the
+  kernel arbitrates. "The held-out test is one look" is the single promise
+  this library exists to keep.
+- **An unusable cell budget passed or crashed.** `cells_budget` was never
+  validated: `0` — a search that evaluated nothing — reported a clean PASS,
+  because there was nothing to deflate and no gap to block; a non-numeric
+  value instead raised `ValueError` out of `int()` far from the cause. A
+  budget must now be a whole number of at least one, and a record already
+  on disk carrying something else reads **INCOMPLETE** with the reason
+  named, rather than being read as a budget of one.
+- **A malformed anchor entry crashed verification.** Rejecting an empty
+  `entries` mapping asked whether entries exist, never what shape they are,
+  and every entry is dereferenced with `.get()` — so
+  `{"entries": {"registration": []}}` raised `AttributeError` out of
+  verification, and out of report generation with it. An entry that does
+  not name a commit and a path makes the record **unverifiable**, which is
+  a verdict; a traceback is not.
+
+### Fixed — five ways a PASS could be green without its evidence
 
 - **A bar changed after the test look reported PASS.** Lowering a frozen
   threshold once the result is known is precisely the attack the seal exists

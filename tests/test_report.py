@@ -535,6 +535,47 @@ class TestEvidenceMustSupportThePass:
         assert data["verdict"]["status"] == "INCOMPLETE"
         assert any("promises NOTHING" in g for g in data["gaps"])
 
+    # ── the budget is a denominator, so it has to be a number ───────────
+    @pytest.mark.parametrize("bad", [0, -3, True, "sixty-four", 2.5, None])
+    def test_an_unusable_cells_budget_is_refused_at_construction(self, bad):
+        with pytest.raises((TypeError, ValueError)):
+            nullbar.Registration(
+                name="z", hypothesis="h", design={},
+                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+                cells_budget=bad)
+
+    def _legacy_budget(self, tmp_path, budget):
+        """A record carrying a budget construction would now refuse."""
+        p = tmp_path / "z.json"
+        p.write_text(json.dumps(
+            {"name": "z", "hypothesis": "h", "design": {},
+             "bar": {"t": {"metric": "t", "op": ">=", "value": 3.0}},
+             "created_at": "2026-01-01T00:00:00+00:00",
+             "cells_budget": budget}))
+        reg = nullbar.Registration.load(p)
+        (tmp_path / "z.test_look.json").write_text(json.dumps(
+            {"at": "2026-02-01T00:00:00+00:00", "results": {"t": 5.0},
+             "registration_sha256": reg.seal_status(p)["sha256"]}))
+        return p
+
+    @pytest.mark.parametrize("bad", [0, -1, "sixty-four", 2.5])
+    def test_a_legacy_unusable_budget_blocks_instead_of_passing(
+            self, tmp_path, bad):
+        # cells_budget=0 with no ledger reported a clean PASS: nothing to
+        # deflate and nothing blocked. A string crashed int() instead.
+        p = self._legacy_budget(tmp_path, bad)
+        data = report_data(p, sims=300)
+        assert data["verdict"]["status"] == "INCOMPLETE"
+        assert any("cells_budget" in g for g in data["gaps"])
+
+    def test_a_budget_of_one_still_needs_no_ledger(self, tmp_path):
+        p = self._legacy_budget(tmp_path, 1)
+        assert report_data(p, sims=300)["verdict"]["status"] == "PASS"
+
+    def test_a_multi_cell_budget_still_needs_a_ledger(self, tmp_path):
+        p = self._legacy_budget(tmp_path, 64)
+        assert report_data(p, sims=300)["verdict"]["status"] == "INCOMPLETE"
+
     def test_a_ledger_does_not_undercount_when_params_carry_a_name(self,
                                                                   tmp_path):
         # `{"name": name, **params}` let params["name"] overwrite the

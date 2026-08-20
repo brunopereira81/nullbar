@@ -120,6 +120,19 @@ class Registration:
         # parameter, so every registration with a non-empty bar was stored
         # under the name of its LAST condition. Found by the first report
         # rendered off a frozen file, which is what an artifact is for.
+        # A budget is the denominator of every deflation figure the bar is
+        # set against. Zero says "I searched nothing", which no search did;
+        # a bool is not a count; a string crashes int() somewhere far away
+        # from here. cells_budget=0 with no ledger reported a clean PASS.
+        if isinstance(cells_budget, bool) or not isinstance(cells_budget, int):
+            raise TypeError(
+                f"cells_budget must be an integer, got "
+                f"{type(cells_budget).__name__} — it is the number of cells "
+                "the search spent, and every deflation figure divides by it")
+        if cells_budget < 1:
+            raise ValueError(
+                f"cells_budget must be at least 1, got {cells_budget} — a "
+                "search that evaluated no cells produced no result to grade")
         if not bar:
             raise ValueError(
                 "bar must contain at least one condition — a registration "
@@ -272,18 +285,43 @@ class Registration:
         p = Path(reg_path)
         self._frozen_doc(p)                       # seal must hold first
         stamp = self._stamp_path(p)
-        if stamp.exists():
-            prior = json.loads(stamp.read_text())
-            raise AlreadySpentError(
-                f"test look already spent at {prior['at']} — a second look "
-                "certifies nothing and violates the registration")
-        stamp.write_text(json.dumps({
+        payload = json.dumps({
             "at": datetime.now(timezone.utc).isoformat(),
             "registration": self.doc.get("name"),
             "registration_sha256": self.sha256 or hashlib.sha256(
                 self._payload().encode()).hexdigest(),
             "results": results,
-        }, indent=2, default=str))
+        }, indent=2, default=str)
+        # EXCLUSIVE creation, not exists()-then-write. The check and the
+        # write were two steps, so two callers could both find no stamp and
+        # both succeed — and "the test look was spent once" is the single
+        # promise this whole library is built to keep. Forcing the
+        # interleaving produced two successes. ``open("x")`` makes the
+        # question and the answer the same operation, and the kernel
+        # arbitrates. The text is built BEFORE the handle exists, so a
+        # failure while serialising cannot leave a truncated stamp that
+        # blocks the look forever.
+        try:
+            with stamp.open("x") as fh:
+                fh.write(payload)
+        except FileExistsError:
+            raise AlreadySpentError(
+                f"test look already spent at {self._stamp_at(stamp)} — a "
+                "second look certifies nothing and violates the "
+                "registration") from None
+
+    @staticmethod
+    def _stamp_at(stamp: Path) -> str:
+        """The prior look's timestamp, for the refusal message only.
+
+        An unreadable stamp must still REFUSE — reporting "when" is a
+        courtesy, and a courtesy that raises would turn a correct refusal
+        into a crash.
+        """
+        try:
+            return str(json.loads(stamp.read_text())["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return "an unrecorded time (the stamp is unreadable)"
 
     # ── the verdict ─────────────────────────────────────────────────────────
     def evaluate(self, results: dict[str, Any]) -> dict[str, bool]:
@@ -373,9 +411,17 @@ class Registration:
         budget = None
         if n_trials is not None:
             registered = doc.get("cells_budget")
+            # Fail closed on a budget this code cannot read. A legacy or
+            # hand-written record can carry 0, None-like junk or a string,
+            # and int() on it raised from inside the grading path — an
+            # unreadable promise is not a satisfied one.
+            try:
+                ok = (registered is None
+                      or int(n_trials) <= int(registered))
+            except (TypeError, ValueError):
+                ok = False
             budget = {"registered": registered, "spent": int(n_trials),
-                      "ok": registered is None
-                      or int(n_trials) <= int(registered)}
+                      "ok": ok}
 
         status = self.seal_status(p, known) if p is not None else None
         # ``bool(bar)`` is load-bearing. Freezing an empty bar is refused,

@@ -314,6 +314,56 @@ class TestRegistration:
         with pytest.raises(AlreadySpentError):
             r.spend_test_look(p, {"t": 99.0})    # the "one more look"
 
+    def test_two_concurrent_looks_produce_exactly_one(self, tmp_path):
+        """The one promise the whole library is built to keep.
+
+        ``exists()`` then ``write_text()`` were two steps: forcing the
+        interleaving produced TWO successes, and neither caller could tell.
+        The barrier makes the race deterministic rather than hoping a
+        scheduler reproduces it.
+        """
+        import threading
+        p = tmp_path / "reg.json"
+        self._reg().freeze(p)
+        gate, wins, spent = threading.Barrier(2), [], []
+
+        def spend(i):
+            r = nullbar.Registration.load(p)
+            original = r._stamp_path
+
+            def at_the_same_moment(pp):
+                s = original(pp)
+                gate.wait(timeout=5)
+                return s
+
+            r._stamp_path = at_the_same_moment
+            try:
+                r.spend_test_look(p, {"t": float(i)})
+                wins.append(i)
+            except AlreadySpentError:
+                spent.append(i)
+
+        threads = [threading.Thread(target=spend, args=(i,)) for i in (1, 2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(wins) == 1, f"{len(wins)} looks were spent, not one"
+        assert len(spent) == 1
+        # and the survivor is the one on disk, not a torn merge of both
+        stamp = json.loads((tmp_path / "reg.test_look.json").read_text())
+        assert stamp["results"]["t"] == float(wins[0])
+
+    def test_an_unreadable_prior_stamp_still_refuses(self, tmp_path):
+        # reporting WHEN the first look happened is a courtesy; a courtesy
+        # that raises turns a correct refusal into a crash
+        p = tmp_path / "reg.json"
+        r = self._reg()
+        r.freeze(p)
+        (tmp_path / "reg.test_look.json").write_text("{not json")
+        with pytest.raises(AlreadySpentError, match="unreadable"):
+            r.spend_test_look(p, {"t": 99.0})
+
     def test_verdict_requires_every_condition(self):
         r = self._reg()
         assert r.verdict({"t3": True, "beats_rule": True})["pass"]

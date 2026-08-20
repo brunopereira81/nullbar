@@ -176,6 +176,28 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
 
     # ── the search ──────────────────────────────────────────────────────────
     budget = doc.get("cells_budget")
+    # A budget is validated at construction now, but a record frozen by an
+    # older version — or written by hand — can carry anything, and this
+    # module then did arithmetic on it. ``cells_budget=0`` with no ledger
+    # reported a clean PASS (nothing to deflate, nothing blocked), and
+    # ``"sixty-four"`` raised ValueError out of int() with no indication
+    # that a malformed registration was the cause.
+    budget_n: int | None = None
+    budget_bad: str | None = None
+    if budget is not None:
+        if isinstance(budget, bool) or not isinstance(budget, (int, float)) \
+                or float(budget) != int(budget):
+            budget_bad = (f"the registration records a cells_budget of "
+                          f"{budget!r}, which is not a whole number of cells")
+        elif int(budget) < 1:
+            budget_bad = (f"the registration records a cells_budget of "
+                          f"{int(budget)} — no search evaluates fewer than "
+                          "one cell, so the deflation its bar was set "
+                          "against cannot be reconstructed")
+        else:
+            budget_n = int(budget)
+    if budget_bad:
+        findings.append(budget_bad)
     trials: dict[str, Any] = {"path": None, "count": None, "sr_variance": None,
                               "budget": budget, "over_budget": None}
     if ledger_path is not None:
@@ -194,13 +216,13 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
     else:
         gaps.append("no trial ledger supplied (--ledger): the number of "
                     "variants actually searched is not on the record")
-    if trials["count"] is not None and budget is not None:
-        trials["over_budget"] = int(trials["count"]) > int(budget)
+    if trials["count"] is not None and budget_n is not None:
+        trials["over_budget"] = int(trials["count"]) > budget_n
         if trials["over_budget"]:
             findings.append(
                 f"the search spent {trials['count']} cells against a "
-                f"registered budget of {budget} — the deflation the bar was "
-                "set against no longer applies")
+                f"registered budget of {budget_n} — the deflation the bar "
+                "was set against no longer applies")
 
     # ── the verdict, graded off the frozen file ─────────────────────────────
     conditions = results.get("conditions")
@@ -265,9 +287,12 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
 
     # Which gaps are load-bearing for THIS registration.
     blocking = []
-    if trials["count"] is None and budget is not None and int(budget) > 1:
+    if budget_bad:
+        # Fail closed: a budget nobody can read is not a budget of one.
+        blocking.append(budget_bad)
+    elif trials["count"] is None and budget_n is not None and budget_n > 1:
         blocking.append(
-            f"the registration claims a {int(budget)}-cell search and no "
+            f"the registration claims a {budget_n}-cell search and no "
             "trial ledger was supplied, so the deflation its bar was set "
             "against cannot be computed")
     status = _status(verdict, stamp, mismatch,
@@ -306,7 +331,7 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
         "anchor": anchor,
         "findings": findings,
     }
-    data["deflation"] = _deflation(results, trials, budget, gaps,
+    data["deflation"] = _deflation(results, trials, budget_n, gaps,
                                    sims=sims, seed=seed)
     data["gaps"] = gaps
     return data
