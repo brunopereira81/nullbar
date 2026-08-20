@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import (MAX_RECORD_BYTES, RecordReadError, check_record,
-                       record_bytes, record_text)
+from ._records import (MAX_RECORD_BYTES, RecordReadError, record_bytes,
+                       record_text)
 
 ANCHOR_SUFFIX = ".anchor.json"
 
