@@ -184,6 +184,17 @@ class Registration:
         p = Path(path)
         payload = self._payload()
         digest = hashlib.sha256(payload.encode()).hexdigest()
+        # A DANGLING symlink is the case that breaks both branches below:
+        # `exists()` follows the link and is False, so control reaches the
+        # exclusive create — which fails, because the link itself is very
+        # much there. The retry then found the same state and recursed
+        # until the stack ran out. Neither "it exists" nor "it does not"
+        # is a usable answer about a path like this, so say so.
+        if p.is_symlink() and not p.exists():
+            raise FileExistsError(
+                f"{p} is a symlink whose target does not exist — a "
+                "registration cannot be frozen through a dangling link; "
+                "point it at a real path or remove it")
         if p.exists():
             old = record_text(p, "registration")
             if hashlib.sha256(old.encode()).hexdigest() != digest:
@@ -212,6 +223,15 @@ class Registration:
                 with p.open("x") as fh:
                     fh.write(payload)
             except FileExistsError:
+                # Someone won the race between the exists() above and here.
+                # Re-enter ONCE, not recursively: the first version called
+                # freeze() again and a path that can neither be created nor
+                # read — a dangling symlink — recursed until RecursionError.
+                # A bounded retry either resolves or reports.
+                if not p.exists():
+                    raise FileExistsError(
+                        f"{p} cannot be created and does not resolve to a "
+                        "readable registration") from None
                 return self.freeze(p)
         self.path, self.sha256 = p, digest
         return digest

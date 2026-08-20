@@ -1225,3 +1225,58 @@ class TestAJunkCommittedEntrySaysSo:
         out = verify_anchor(p)
         assert any("is not readable, so a move of that entry cannot be "
                    "detected" in n for n in out["notes"]), out["notes"]
+
+
+class TestEveryCommitTargetIsCheckedFirst:
+    """``_commit`` computes the same repo-relative paths as ``_entry`` and
+    used to do it unchecked — and it runs FIRST under ``--commit``, so an
+    external ledger raised a bare ValueError out of pathlib before the
+    guard written for exactly that case could run. One implementation now."""
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "reg.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        return p
+
+    def test_an_external_ledger_is_refused_with_commit(self, tmp_path,
+                                                       capsys):
+        p = self._repo(tmp_path)
+        outside = tmp_path.parent / "elsewhere_trials.jsonl"
+        outside.write_text("")
+        rc = cli.main(["anchor", str(p), "--ledger", str(outside), "--commit"])
+        assert rc == 2
+        assert "resolves outside the repository" in capsys.readouterr().err
+
+    def test_an_external_ledger_is_refused_without_commit_too(self, tmp_path,
+                                                              capsys):
+        p = self._repo(tmp_path)
+        outside = tmp_path.parent / "elsewhere2.jsonl"
+        outside.write_text("")
+        assert cli.main(["anchor", str(p), "--ledger", str(outside)]) == 2
+
+    def test_nothing_is_committed_when_a_target_is_refused(self, tmp_path):
+        p = self._repo(tmp_path)
+        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path,
+                                capture_output=True, text=True).stdout
+        outside = tmp_path.parent / "elsewhere3.jsonl"
+        outside.write_text("")
+        cli.main(["anchor", str(p), "--ledger", str(outside), "--commit"])
+        after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path,
+                               capture_output=True, text=True).stdout
+        assert before == after, "committed despite refusing a target"
+
+    def test_a_ledger_inside_the_repo_still_works(self, tmp_path):
+        p = self._repo(tmp_path)
+        led = tmp_path / "trials.jsonl"
+        led.write_text("")
+        assert cli.main(["anchor", str(p), "--ledger", str(led),
+                         "--commit"]) == 0

@@ -20,6 +20,21 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **A dangling symlink recursed until the stack ran out.** `exists()`
+  FOLLOWS the link and is False, so control reached the exclusive create —
+  which fails, because the link itself is very much there — and the retry
+  found the same state and called `freeze()` again. Neither "it exists" nor
+  "it does not" is a usable answer about such a path, so it is refused by
+  name, and the retry for a genuine race is bounded rather than recursive.
+  (Introduced by the exclusive-creation fix below, in the same release.)
+- **`anchor --commit` crashed on a ledger outside the repository.**
+  `_commit` computes the same repo-relative paths as `_entry` and did it
+  unchecked — and it runs FIRST under `--commit`, so an external `--ledger`
+  reached `git add` and raised a bare `ValueError` out of pathlib *ahead of
+  the containment guard written for exactly that case*. One implementation
+  now, applied to every target before anything is committed; nothing is
+  committed when a target is refused. (Also introduced in this release, by
+  putting the guard in only one of the two places that needed it.)
 - **`freeze()` could lose the refusal it exists to make.** `exists()`-then-
   write is two steps, so two callers freezing DIFFERENT designs at one path
   could both find nothing and both write, the second silently overwriting

@@ -1328,3 +1328,51 @@ class TestThePublicSurface:
 
     def test_everything_in_all_actually_exists(self):
         assert [n for n in nullbar.__all__ if not hasattr(nullbar, n)] == []
+
+    def test_a_dangling_symlink_is_refused_not_recursed(self, tmp_path):
+        """``exists()`` follows the link and is False, so control reached
+        the exclusive create — which fails, because the link itself is very
+        much there. The retry found the same state and recursed until the
+        stack ran out."""
+        p = tmp_path / "reg.json"
+        p.symlink_to(tmp_path / "nowhere.json")
+        assert p.is_symlink() and not p.exists()
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        with pytest.raises(FileExistsError, match="target does not exist"):
+            reg.freeze(p)
+
+    def test_a_symlink_to_a_real_path_still_freezes(self, tmp_path):
+        # the guard must not refuse an ordinary layout
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        p = link / "reg.json"
+        nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        assert (real / "reg.json").exists()
+
+    def test_the_retry_is_bounded(self, tmp_path):
+        """A path that can neither be created nor read must REPORT, not
+        recurse. Forced by making the exclusive create always fail while
+        exists() stays False."""
+        p = tmp_path / "reg.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        real = Path.open
+
+        def always_taken(self, mode="r", *a, **k):
+            if mode == "x" and self == p:
+                raise FileExistsError(p)
+            return real(self, mode, *a, **k)
+
+        with mock.patch.object(Path, "open", always_taken):
+            with pytest.raises(FileExistsError, match="cannot be created"):
+                reg.freeze(p)

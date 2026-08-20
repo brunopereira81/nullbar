@@ -157,18 +157,26 @@ def _remotes_containing(commit: str, repo: Path) -> list[str]:
                   if line.strip() and "->" not in line)
 
 
-def _entry(path: Path, repo: Path) -> dict[str, Any]:
-    # A path that resolves OUT of the repository — a symlink to /dev/zero,
-    # say — made `relative_to` raise a bare ValueError from deep inside
-    # pathlib, which nothing caught and no message explained. The verifier
-    # already refuses this case in its own vocabulary; anchoring should
-    # say the same thing rather than crash.
+def _rel_in_repo(path: Path, repo: Path) -> str:
+    """``path`` as a repo-relative posix path, or GitError.
+
+    ONE implementation, because there were two sites computing this and
+    only one of them checked: ``_entry`` refused a path resolving out of
+    the repository and ``_commit`` — which runs FIRST under ``--commit`` —
+    did not, so ``nullbar anchor --ledger /tmp/trials.jsonl --commit``
+    reached ``git add`` and raised a bare ValueError out of pathlib before
+    the check could ever run.
+    """
     try:
-        rel = path.resolve().relative_to(repo.resolve()).as_posix()
+        return path.resolve().relative_to(repo.resolve()).as_posix()
     except ValueError:
         raise GitError(
             f"{path} resolves outside the repository at {repo} — an anchor "
             "records files in the repository it attests to") from None
+
+
+def _entry(path: Path, repo: Path) -> dict[str, Any]:
+    rel = _rel_in_repo(path, repo)
     commit = _last_commit(rel, repo)
     if commit is None:
         raise GitError(
@@ -203,6 +211,11 @@ def anchor(reg_path: str | Path, *, ledger: str | Path | None = None,
     if ledger is not None:
         paths["ledger"] = Path(ledger)
     targets = [p for p in paths.values() if p.exists()]
+    # Validate BEFORE anything is committed. _commit computes the same
+    # repo-relative paths and used to do it unchecked, so an external
+    # ledger crashed there — ahead of the guard that exists for it.
+    for target in targets:
+        _rel_in_repo(target, repo)
 
     if commit:
         _commit(repo, targets, message or f"anchor: {reg.name}")
@@ -249,7 +262,7 @@ def _commit(repo: Path, paths: list[Path], message: str) -> bool:
     """Commit exactly these paths. Never `git commit -a`, never `--amend`:
     the first would sweep in whatever else is in the tree, and the second
     rewrites the commit an earlier anchor may already point at."""
-    rels = [p.resolve().relative_to(repo.resolve()).as_posix() for p in paths]
+    rels = [_rel_in_repo(p, repo) for p in paths]
     _git(["add", "--", *rels], repo)
     if _ok(["diff", "--cached", "--quiet", "--", *rels], repo):
         return False                    # already committed, unchanged
