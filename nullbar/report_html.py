@@ -142,7 +142,9 @@ def _missing(what: str) -> str:
 _ANCHOR_LIMIT = (
     '<p class="note">What a git anchor proves: that the bytes committed are '
     "the bytes graded, that the registration commit precedes the test-look "
-    "commit, and that both are still reachable from HEAD. What it does NOT "
+    "commit, and that all of them are still reachable from HEAD. The trial "
+    "ledger is covered too, as a prefix &mdash; it may grow, and rows may "
+    "not be edited or removed. What it does NOT "
     "prove: <strong>wall-clock time</strong> &mdash; commit dates are "
     "self-reported and one environment variable forges them, so only a push "
     "to a host the researcher does not control was witnessed by anyone "
