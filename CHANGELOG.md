@@ -39,6 +39,18 @@ reproduced before being fixed and mutation-checked after.
   which ledger the count came from and which files the anchor covers, and it
   names the ledger when they disagree.
 
+### Upgrade note
+
+Anchor records written by this version carry a third entry, `ledger`.
+**Verify them with 0.7.0 or later.** nullbar 0.6.0 resolved an entry's file
+from a hardcoded role -> path mapping rather than from the path the record
+names, so it reads the ledger entry against the test-look stamp, finds the
+hashes disagree, and reports `broken` — the strongest accusation the tool
+makes, on a record that is fine. Caught on this repo's own dashboard, which
+had 0.6.0 resident in memory and turned seven intact records red. Entries
+are resolved from the recorded path now, so a future role added to the
+format will not do this again.
+
 ### Fixed — the one look, the budget, and malformed records
 
 - **The one-look guard had a race.** `spend_test_look` asked whether the
