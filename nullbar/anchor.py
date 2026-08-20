@@ -216,6 +216,17 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             "anchor can only be checked from a checkout that carries it")
         return out
 
+    if not isinstance(entries, dict) or "registration" not in entries:
+        # "intact" was returned for a sidecar naming nothing at all: the
+        # loop below simply had no work, so every check passed vacuously.
+        # An anchor that does not anchor the registration is unverifiable,
+        # not verified.
+        out["status"] = "unverifiable"
+        out["findings"].append(
+            "the anchor record names no registration entry — it attests to "
+            "nothing, and an empty attestation is not an intact one")
+        return out
+
     broken = False
     for role, rec in entries.items():
         commit, rel = rec.get("commit", ""), rec.get("path", "")

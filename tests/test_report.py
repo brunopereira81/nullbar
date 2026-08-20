@@ -419,3 +419,98 @@ class TestCLI:
     def test_no_arguments_is_a_usage_error(self, capsys):
         assert cli.main([]) == 2
         assert "usage" in capsys.readouterr().err
+
+
+class TestEvidenceMustSupportThePass:
+    """Five ways a green PASS could be produced without the evidence to
+    support it, all reported by review on 2026-08-20 and all reproduced
+    before being fixed."""
+
+    def test_a_bar_changed_after_the_look_is_contradicted(self, tmp_path):
+        # THE attack the seal exists to catch: lower the threshold after
+        # seeing the result. It was reported as a finding while the status
+        # stayed PASS.
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 9.0}})
+        p = tmp_path / "a.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 4.0})
+        doc = json.loads(p.read_text())
+        doc["bar"]["t"]["value"] = 3.0            # 4.0 now "clears" it
+        p.write_text(json.dumps(doc, indent=2, sort_keys=True))
+        data = report_data(p, sims=2000)
+        assert data["seal"]["stamp_bound"] is False
+        assert data["verdict"]["status"] == "CONTRADICTED"
+
+    def test_a_claimed_search_with_no_ledger_cannot_pass(self, tmp_path):
+        reg = nullbar.Registration(
+            name="y", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=64)
+        p = tmp_path / "b.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50})
+        assert report_data(p, sims=2000)["verdict"]["status"] == "INCOMPLETE"
+
+    def test_the_same_record_passes_once_the_ledger_is_supplied(self,
+                                                               tmp_path):
+        # the gap BLOCKS; it does not condemn
+        reg = nullbar.Registration(
+            name="y", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=64)
+        p = tmp_path / "b.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50})
+        led = nullbar.TrialLedger(tmp_path / "l.jsonl")
+        for i in range(64):
+            led.record("y", {"c": i}, metrics={"sr": 0.01 * i})
+        assert report_data(p, led.path,
+                           sims=2000)["verdict"]["status"] == "PASS"
+
+    def test_a_single_cell_registration_needs_no_ledger(self, tmp_path):
+        # demanding one everywhere would make PASS unreachable for a
+        # pre-specified rule that searched nothing
+        reg = nullbar.Registration(
+            name="one", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "c.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50})
+        assert report_data(p, sims=2000)["verdict"]["status"] == "PASS"
+
+    def test_an_unanchored_record_can_still_pass(self, tmp_path):
+        # anchoring is optional; requiring git would make PASS unreachable
+        # for anyone not using it
+        reg = nullbar.Registration(
+            name="two", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "d.json"
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50})
+        data = report_data(p, sims=2000)
+        assert any("not anchored" in g for g in data["gaps"])
+        assert data["verdict"]["status"] == "PASS"
+
+    def test_a_bar_with_no_conditions_is_refused(self):
+        with pytest.raises(ValueError, match="at least one condition"):
+            nullbar.Registration(name="z", hypothesis="h", design={}, bar={})
+
+    def test_a_ledger_does_not_undercount_when_params_carry_a_name(self,
+                                                                  tmp_path):
+        # `{"name": name, **params}` let params["name"] overwrite the
+        # strategy name, so two strategies deduplicated into one trial —
+        # silently shrinking the count every deflation figure depends on
+        led = nullbar.TrialLedger(tmp_path / "t.jsonl")
+        led.record("strategy_A", {"name": "shared", "q": 0.1})
+        led.record("strategy_B", {"name": "shared", "q": 0.1})
+        assert led.count() == 2
+
+    def test_a_genuine_duplicate_is_still_one_trial(self, tmp_path):
+        led = nullbar.TrialLedger(tmp_path / "t.jsonl")
+        led.record("strategy_A", {"name": "shared", "q": 0.1})
+        led.record("strategy_A", {"name": "shared", "q": 0.1})
+        assert led.count() == 1

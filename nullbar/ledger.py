@@ -72,9 +72,19 @@ class TrialLedger:
         a numeric ``"sr"`` key (PER-PERIOD Sharpe) is what
         ``sr_variance()`` reads.
         """
-        h = self._hash({"name": name, **params})
+        # NESTED, not merged. `{"name": name, **params}` let a
+        # params["name"] overwrite the strategy name, so two different
+        # strategies sharing a parameter called "name" deduplicated into one
+        # trial — silently UNDERCOUNTING the search that every deflation
+        # figure depends on.
+        h = self._hash({"strategy": name, "params": params})
         rows = self._scan()
-        if any(r["hash"] == h for r in rows):
+        # Dedupe on the semantic pair as well as the stored hash, so a ledger
+        # written by an older version still matches instead of appending a
+        # duplicate and inflating the count.
+        if any(r["hash"] == h
+               or (r.get("name") == name and r.get("params") == params)
+               for r in rows):
             return h
         row = {"hash": h, "name": name, "params": params, "note": note,
                "metrics": dict(metrics) if metrics else {},

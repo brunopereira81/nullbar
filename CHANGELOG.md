@@ -2,6 +2,48 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.7.0] — 2026-08-20
+
+Five ways a green PASS could be produced without the evidence to support it,
+found by review, each reproduced before being fixed and mutation-checked
+after.
+
+### Fixed
+
+- **A bar changed after the test look reported PASS.** Lowering a frozen
+  threshold once the result is known is precisely the attack the seal exists
+  to catch, and it was recorded as a *finding* while the status stayed green
+  — a stamp naming a different sha256 than the file it grades now reads
+  **CONTRADICTED**, as a broken anchor already did. The anchor is optional;
+  the seal is not, so the seal was the more serious of the two to have left
+  advisory.
+- **A claimed search with no trial count reported PASS.** Gaps were
+  collected and then ignored by the status. A registration claiming more
+  than one cell with no ledger now reads **INCOMPLETE**: the deflation its
+  bar was set against cannot be computed at all. Gaps that do not bear on
+  the verdict still do not block it — a single-cell registration needs no
+  ledger, and requiring an anchor would make PASS unreachable without git.
+  The README promised the stronger rule and now states the real one.
+- **An empty bar was accepted and passed.** `Registration(bar={})` graded
+  every result as PASS with zero conditions. Refused at construction: a
+  promise with nothing to satisfy is not a promise.
+- **A malformed anchor verified as intact.** A sidecar containing
+  `{"entries": {}}` returned `intact` because the checking loop had no work
+  and every check passed vacuously. An anchor that does not name a
+  registration is **unverifiable**, not verified.
+- **The trial count silently undercounted.** `record()` hashed
+  `{"name": name, **params}`, so a `params["name"]` overwrote the strategy
+  name and two different strategies sharing that parameter deduplicated into
+  one trial — shrinking the very number every deflation figure depends on.
+  Hashed nested now, and dedupe compares the semantic pair as well as the
+  stored hash so an older ledger still matches instead of double-counting.
+
+### Notes
+
+- 209 tests (was 199). Six mutations checked, all caught.
+- Consumers reading a report without its ledger will see INCOMPLETE where
+  they saw PASS. That is the fix working: pass the ledger.
+
 ## [0.6.0] — 2026-08-18
 
 Git anchoring. Steps 1–7 are enforced by your own discipline and your own

@@ -124,9 +124,12 @@ registration and its hash, the trial count against the registered budget,
 the null control, the clustered result, the fill bracket, the deflation
 against its **95th-percentile** noise threshold, the spent test look, and
 the bar with every condition's observed value. Nothing is recomputed from
-market data, and anything the record does not contain is listed as missing —
-an incomplete record renders as `INCOMPLETE`, never as a pass, and exits
-non-zero.
+market data, and anything the record does not contain is listed as missing.
+A gap the verdict DEPENDS on blocks the pass — a registration claiming a
+multi-cell search with no trial count renders `INCOMPLETE`, never as a pass,
+and exits non-zero. Gaps that do not bear on the verdict (an unanchored
+record, say) are reported without blocking it, because demanding git would
+put `PASS` out of reach for anyone not using it.
 
 ## What this library will not do
 
@@ -173,7 +176,7 @@ data.
 
 ## Status
 
-`v0.6.0` — extracted 2026-08-12 from a live production system
+`v0.7.0` — extracted 2026-08-12 from a live production system
 (Coinbase spot, TimescaleDB, 2,100+ tests), then put through three
 independent audit passes. Every finding is fixed, each one mutation-checked
 against a test that fails when the bug is restored; the full list is in the

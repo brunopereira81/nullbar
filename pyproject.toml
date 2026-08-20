@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nullbar"
-version = "0.6.0"
+version = "0.7.0"
 description = "Pre-registration and honest statistics for trading research: trial ledgers, deflated Sharpe, clustered inference, leak detection, fill realism."
 readme = "README.md"
 license = { text = "MIT" }

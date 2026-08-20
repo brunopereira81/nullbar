@@ -120,6 +120,11 @@ class Registration:
         # parameter, so every registration with a non-empty bar was stored
         # under the name of its LAST condition. Found by the first report
         # rendered off a frozen file, which is what an artifact is for.
+        if not bar:
+            raise ValueError(
+                "bar must contain at least one condition — a registration "
+                "with nothing to satisfy grades every result as PASS, which "
+                "is the opposite of what freezing a bar is for")
         for cond, req in bar.items():
             if isinstance(req, dict):
                 missing = {"metric", "op", "value"} - set(req)

@@ -258,8 +258,19 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
     elif anchor["status"] == "unverifiable":
         gaps.append("the recorded anchor could not be checked here")
 
+    # Which gaps are load-bearing for THIS registration.
+    blocking = []
+    if trials["count"] is None and budget is not None and int(budget) > 1:
+        blocking.append(
+            f"the registration claims a {int(budget)}-cell search and no "
+            "trial ledger was supplied, so the deflation its bar was set "
+            "against cannot be computed")
     status = _status(verdict, stamp, mismatch,
-                     anchor_broken=anchor["status"] == "broken")
+                     anchor_broken=anchor["status"] == "broken",
+                     seal_unbound=stamp is not None
+                     and not seal["stamp_bound"],
+                     blocking_gaps=blocking)
+    gaps.extend(blocking)
 
     data: dict[str, Any] = {
         "nullbar_version": __version__,
@@ -306,16 +317,30 @@ def _before(a: Any, b: Any) -> bool:
 
 
 def _status(verdict: dict[str, Any], stamp: dict[str, Any] | None,
-            mismatch: str | None, *, anchor_broken: bool = False) -> str:
+            mismatch: str | None, *, anchor_broken: bool = False,
+            seal_unbound: bool = False,
+            blocking_gaps: list[str] | None = None) -> str:
     """PASS / FAIL / INCOMPLETE / CONTRADICTED — never a bare boolean.
 
     INCOMPLETE exists because "the record does not say" and "the strategy
     failed" are different answers, and collapsing them is how an unfinished
     record reads as a result.
     """
-    if mismatch is not None or anchor_broken:
+    # A stamp naming a different sha256 than the file it grades is the
+    # attack the seal exists to catch — lower the bar after seeing the
+    # result — and it was reported as a finding while the status stayed
+    # PASS. A broken ANCHOR already read CONTRADICTED; a broken SEAL is at
+    # least as serious, since the anchor is optional and the seal is not.
+    if mismatch is not None or anchor_broken or seal_unbound:
         return "CONTRADICTED"
     if stamp is None:
+        return "INCOMPLETE"
+    if blocking_gaps:
+        # Evidence the verdict DEPENDS on is missing, so there is nothing to
+        # pass. Not every gap blocks — an unanchored record is perfectly
+        # gradable, and demanding git would make PASS unreachable for anyone
+        # not using it. What blocks is a claimed search with no trial count:
+        # the deflation the bar was set against cannot be computed at all.
         return "INCOMPLETE"
     if verdict["pass"]:
         return "PASS"

@@ -259,11 +259,18 @@ class TestReportIntegration:
         nullbar.anchor(path, commit=True)
         _spend(reg, path)
         nullbar.anchor(path, commit=True)
-        assert report_data(path, sims=2000)["verdict"]["status"] == "PASS"
+        # a ledger is REQUIRED for a 4-cell registration to reach PASS: the
+        # deflation its bar was set against cannot be computed without the
+        # trial count, so the status is INCOMPLETE until one is supplied.
+        led = nullbar.TrialLedger(path.parent / "trials.jsonl")
+        for i in range(4):
+            led.record("study", {"cell": i}, metrics={"sr": 0.1 + 0.02 * i})
+        assert report_data(path, led.path,
+                           sims=2000)["verdict"]["status"] == "PASS"
         doc = json.loads(path.read_text())
         doc["bar"]["t3"]["value"] = 1.0
         path.write_text(json.dumps(doc, indent=2, sort_keys=True))
-        data = report_data(path, sims=2000)
+        data = report_data(path, led.path, sims=2000)
         # the conditions still "pass"; the record does not
         assert data["verdict"]["status"] == "CONTRADICTED"
 
@@ -315,3 +322,23 @@ class TestAnchorCLI:
         assert cli.main(["anchor", str(path)]) == 2
         err = capsys.readouterr().err
         assert "Traceback" not in err and err.strip()
+
+
+class TestAnAnchorMustAnchorSomething:
+    def test_a_sidecar_naming_no_registration_is_unverifiable(self, repo):
+        # "intact" was returned for a sidecar naming nothing: the checks had
+        # no work and every one passed vacuously
+        _, path = _register(repo)
+        path.with_suffix(".anchor.json").write_text(
+            json.dumps({"entries": {}, "repo": str(repo)}))
+        v = verify_anchor(path)
+        assert v["status"] == "unverifiable"
+        assert v["status"] != "intact"
+        assert any("no registration entry" in f for f in v["findings"])
+
+    def test_a_sidecar_with_only_a_test_look_entry_is_unverifiable(self, repo):
+        _, path = _register(repo)
+        path.with_suffix(".anchor.json").write_text(json.dumps(
+            {"entries": {"test_look": {"path": "x", "commit": "0" * 40,
+                                       "sha256": "y"}}, "repo": str(repo)}))
+        assert verify_anchor(path)["status"] == "unverifiable"
