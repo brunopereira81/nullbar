@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import subprocess
 
+from pathlib import Path
+
 import pytest
+from unittest import mock
 
 import nullbar
 from nullbar import cli
@@ -650,3 +653,213 @@ class TestALedgerNamedSomethingElse:
         assert "ledger" in nullbar.verify_anchor(p)["entries"]
         assert not any("not among the files this anchor covers" in g
                        for g in report_data(p, led, sims=200)["gaps"])
+
+
+class TestAbsenceIsNotInnocence:
+    """A check that does not run is not a check that passed.
+
+    Four defects shipped in one week with this exact shape: an empty bar
+    graded every result as PASS, a missing trial ledger left the deflation
+    uncomputed and the verdict green, an empty ``entries`` mapping verified
+    as intact, and — here — an entry DELETED from the working sidecar was
+    skipped by the loop that was supposed to check it. Every one of them was
+    a place where the absence of evidence read as evidence of absence of a
+    problem.
+    """
+
+    def _anchored(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=4)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        led = nullbar.TrialLedger(tmp_path / "r.jsonl")
+        for i in range(4):
+            led.record("s", {"q": i})
+        self._commit(tmp_path, "freeze")
+        reg.spend_test_look(p, results={"t": 5.0})
+        self._commit(tmp_path, "look")
+        nullbar.anchor(p, ledger=tmp_path / "r.jsonl")
+        self._commit(tmp_path, "anchor")
+        return p
+
+    @staticmethod
+    def _commit(repo, msg):
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", msg], cwd=repo, check=True)
+
+    def test_the_baseline_is_intact(self, tmp_path):
+        # without this, every assertion below could pass for the wrong reason
+        p = self._anchored(tmp_path)
+        out = verify_anchor(p)
+        assert out["status"] == "intact", out["findings"]
+        assert sorted(out["entries"]) == ["ledger", "registration", "test_look"]
+
+    @pytest.mark.parametrize("victim", ["test_look", "ledger"])
+    def test_deleting_an_anchored_entry_breaks_it(self, tmp_path, victim):
+        p = self._anchored(tmp_path)
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        del doc["entries"][victim]
+        side.write_text(json.dumps(doc, indent=2))
+        out = verify_anchor(p)
+        assert out["status"] == "broken", out
+        assert any("REMOVED" in f for f in out["findings"]), out["findings"]
+
+    def test_deleting_the_test_look_entry_also_erases_the_ordering(self,
+                                                                   tmp_path):
+        # the ordering IS the claim a git anchor makes; dropping the entry
+        # dropped the claim and left the record reading intact
+        p = self._anchored(tmp_path)
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        del doc["entries"]["test_look"]
+        side.write_text(json.dumps(doc, indent=2))
+        out = verify_anchor(p)
+        assert out["ordering"] is None            # the evidence is gone
+        assert out["status"] == "broken"          # and that is not "fine"
+        assert report_data(p, tmp_path / "r.jsonl",
+                           sims=200)["verdict"]["status"] == "CONTRADICTED"
+
+
+class TestAnchorPathsStayInsideTheRepository:
+    """``repo / rel`` is not a containment check.
+
+    An absolute ``rel`` discards ``repo`` entirely and ``../`` walks out of
+    it, so verification read whatever a crafted sidecar named — a file
+    outside the checkout, or a special file with no end to it — before
+    returning any verdict, on a record that by construction comes from
+    somewhere untrusted.
+    """
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        return p
+
+    def _with_path(self, tmp_path, p, rel):
+        (tmp_path / "r.anchor.json").write_text(json.dumps(
+            {"kind": "git", "repo": str(tmp_path),
+             "entries": {"registration": {"commit": "HEAD", "path": "r.json"},
+                         "ledger": {"commit": "HEAD", "path": rel}}}))
+        return verify_anchor(p)
+
+    @pytest.mark.parametrize("rel", [
+        "/etc/hostname",
+        "../../../../../../etc/hostname",
+        "sub/../../escape.json",
+        "/dev/zero",
+    ])
+    def test_a_path_outside_the_repository_is_refused(self, tmp_path, rel):
+        p = self._repo(tmp_path)
+        out = self._with_path(tmp_path, p, rel)
+        assert out["status"] == "unverifiable"
+        assert any("inside this repository" in f for f in out["findings"])
+
+    def test_it_is_refused_BEFORE_the_file_is_read(self, tmp_path):
+        # the point is not the verdict, it is that nothing outside the
+        # checkout was opened to reach it
+        p = self._repo(tmp_path)
+        secret = tmp_path.parent / "secret_not_in_repo.txt"
+        secret.write_text("x")
+        opened = []
+        real = Path.read_bytes
+
+        def watched(self, *a, **k):
+            opened.append(str(self))
+            return real(self, *a, **k)
+
+        with mock.patch.object(Path, "read_bytes", watched):
+            self._with_path(tmp_path, p, str(secret))
+        assert not any("secret_not_in_repo" in o for o in opened), opened
+
+    def test_an_ordinary_nested_path_is_still_accepted(self, tmp_path):
+        # the guard must not refuse the legitimate case it guards
+        p = self._repo(tmp_path)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "t.jsonl").write_text("")
+        out = self._with_path(tmp_path, p, "sub/t.jsonl")
+        assert out["status"] != "unverifiable", out["findings"]
+
+
+class TestAnUnboundedReadCannotHappen:
+    """Containment is not the only guard, because a guard can be regressed.
+
+    A mutation test that disabled ``_inside`` drove ``read_bytes()`` on
+    ``/dev/zero`` — an infinite stream — and took the whole machine down
+    three times, killing the editor session with it (the processes shared a
+    systemd scope with ``OOMPolicy=stop``). The path guard is the primary
+    defence; this is the one that holds when the primary does not, and it
+    also covers a device or FIFO sitting INSIDE the repository, where
+    containment has nothing to say.
+    """
+
+    def _repo_with(self, tmp_path, entry_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        (tmp_path / "r.anchor.json").write_text(json.dumps(
+            {"kind": "git", "repo": str(tmp_path),
+             "entries": {"registration": {"commit": "HEAD", "path": "r.json"},
+                         "ledger": {"commit": "HEAD", "path": entry_path}}}))
+        return p
+
+    def test_a_character_device_inside_the_repo_is_not_read(self, tmp_path,
+                                                            monkeypatch):
+        """Containment passes here — the path really is inside the repo —
+        so only the regular-file check can stop the read."""
+        p = self._repo_with(tmp_path, "zero")
+        target = tmp_path / "zero"
+
+        # a device node needs root; simulate one by making is_file() false
+        # for this path exactly, and read_bytes() the trap it would be
+        target.write_text("")
+        real_is_file, real_read = Path.is_file, Path.read_bytes
+
+        def not_a_file(self):
+            return False if self.name == "zero" else real_is_file(self)
+
+        def exploding_read(self, *a, **k):
+            if self.name == "zero":
+                raise AssertionError("read an unbounded special file")
+            return real_read(self, *a, **k)
+
+        monkeypatch.setattr(Path, "is_file", not_a_file)
+        monkeypatch.setattr(Path, "read_bytes", exploding_read)
+        out = verify_anchor(p)              # must not raise
+        assert out["status"] == "broken"
+        assert any("not an ordinary file" in f for f in out["findings"])
+
+    def test_a_directory_is_not_read(self, tmp_path):
+        p = self._repo_with(tmp_path, "adir")
+        (tmp_path / "adir").mkdir()
+        out = verify_anchor(p)
+        assert out["status"] == "broken"
+        assert any("not an ordinary file" in f for f in out["findings"])
+
+    def test_an_ordinary_file_is_still_read(self, tmp_path):
+        # the backstop must not refuse the case it exists to let through
+        p = self._repo_with(tmp_path, "r.json")
+        out = verify_anchor(p)
+        assert not any("not an ordinary file" in f for f in out["findings"])

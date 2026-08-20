@@ -3,6 +3,7 @@ implementation. Several encode production bugs this library exists to
 prevent — if a refactor reintroduces one, its test fails."""
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -1016,3 +1017,95 @@ class TestPackaging:
                 if pat.search(line):
                     stale.append(f"{p.relative_to(ROOT)}:{i}")
         assert not stale, f"stale imports of the old name: {stale}"
+
+
+class TestTheLedgerIsAtomic:
+    """Read, decide, append — three steps with two gaps in them.
+
+    Two workers recording the same ``(name, params)`` both saw no row and
+    both appended it, so an identical pair became two trials and the count
+    every deflation figure divides by no longer described the search.
+    """
+
+    def test_the_decision_and_the_append_share_one_exclusive_lock(self,
+                                                                   tmp_path):
+        """A barrier cannot force this interleaving any more — the second
+        thread blocks on the lock before it can reach the barrier, which is
+        the point. So assert the STRUCTURE instead: the rows are read while
+        an exclusive lock is held, and the row is written before it is
+        released. A refactor that pulls them apart fails here.
+        """
+        led = nullbar.TrialLedger(tmp_path / "t.jsonl")
+        led.record("warm", {"x": 0})
+        events = []
+        real_lock, real_read = led._lock, led._read_rows
+
+        @contextlib.contextmanager
+        def watched_lock(exclusive):
+            events.append(f"acquire:{'EX' if exclusive else 'SH'}")
+            with real_lock(exclusive) as handle:
+                yield handle
+            events.append("release")
+
+        def watched_read():
+            events.append("read")
+            return real_read()
+
+        led._lock, led._read_rows = watched_lock, watched_read
+        led.record("under-the-lock", {"q": 1})
+
+        assert events[0] == "acquire:EX", events
+        assert events[-1] == "release", events
+        assert "read" in events[1:-1], events
+        # and nothing was released and re-taken in between
+        assert events.count("acquire:EX") == 1 and events.count("release") == 1
+
+    def test_concurrent_processes_lose_no_distinct_trial(self, tmp_path):
+        # the lock must serialise, not swallow: an undercounted search is
+        # the defect, and an over-serialised one that drops rows is worse
+        import multiprocessing as mp
+        path = tmp_path / "t.jsonl"
+        with mp.Pool(8) as pool:
+            pool.map(_record_distinct, [(str(path), i) for i in range(24)])
+        rows = [json.loads(x) for x
+                in path.read_text().splitlines() if x.strip()]
+        assert len(rows) == 24
+        assert nullbar.TrialLedger(path).count() == 24
+
+    def test_concurrent_processes_collapse_an_identical_pair(self, tmp_path):
+        import multiprocessing as mp
+        path = tmp_path / "t.jsonl"
+        with mp.Pool(8) as pool:
+            pool.map(_record_same, [(str(path), i) for i in range(24)])
+        rows = [json.loads(x) for x
+                in path.read_text().splitlines() if x.strip()]
+        assert len(rows) == 1, rows
+
+    def test_a_forced_scan_does_not_trust_the_size_heuristic(self, tmp_path):
+        """Size is a proxy for "changed", and two rows can serialise to the
+        same length — so the one place correctness depends on a fresh read,
+        deduplication under the write lock, does not get to trust a proxy.
+        """
+        path = tmp_path / "t.jsonl"
+        led = nullbar.TrialLedger(path)
+        led.record("a", {"q": 1})
+        led.count()                                # prime the cache
+        before = path.read_text()
+        # a DIFFERENT row of exactly the same byte length
+        replacement = before.replace('"name": "a"', '"name": "z"')
+        assert replacement != before and len(replacement) == len(before)
+        path.write_text(replacement)
+        assert path.stat().st_size == led._size    # the heuristic sees nothing
+
+        assert led._scan()[0]["name"] == "a"       # stale, and it cannot tell
+        assert led._scan(force=True)[0]["name"] == "z"
+
+
+def _record_distinct(args):
+    path, i = args
+    nullbar.TrialLedger(path).record("spread", {"q": i})
+
+
+def _record_same(args):
+    path, _ = args
+    nullbar.TrialLedger(path).record("collide", {"q": 1})

@@ -218,6 +218,54 @@ def _remote_pairs(repo: Path) -> list[tuple[str, str]]:
     return pairs
 
 
+def _regular(path: Path) -> bool:
+    """True only for an ordinary file we may safely read whole.
+
+    ``exists()`` is true of a character device, and ``read_bytes()`` on
+    ``/dev/zero`` returns an infinite stream: it allocates until the machine
+    dies. That is not hypothetical — a mutation test that disabled
+    ``_inside`` below drove exactly this path and took the box down three
+    times, killing the editor session with it, because the scope those
+    processes shared has ``OOMPolicy=stop``.
+
+    So containment is not the only guard. ``_inside`` keeps a crafted path
+    out of the checkout; this keeps an unbounded read from happening at all,
+    including for a device or FIFO sitting INSIDE the repository, where
+    containment has nothing to say. A guard that can be regressed should not
+    be the only thing standing between a bad record and the machine.
+    """
+    try:
+        return path.is_file()          # follows symlinks; False for dev/fifo
+    except OSError:
+        return False
+
+
+def _inside(rel: str, repo: Path) -> bool:
+    """Is ``rel`` a relative path that stays inside ``repo``?
+
+    ``repo / rel`` is not a containment check: an ABSOLUTE rel discards
+    ``repo`` entirely, and ``../`` walks out of it. Verification then reads
+    whatever the sidecar names — a file outside the repository, or a special
+    file with no end to it — before returning any verdict, on a record that
+    by construction comes from somewhere untrusted. Refuse the path instead
+    of resolving it; nothing here needs to leave the checkout.
+    """
+    try:
+        candidate = Path(rel)
+        # A fast path, deliberately REDUNDANT: the resolve-and-compare below
+        # already rejects both of these. It is kept because it states the
+        # intent at the top and refuses hostile input without a syscall —
+        # and it is recorded as redundant here because a mutation removing
+        # it survives the suite, correctly, and a surviving mutant that
+        # nobody explains is indistinguishable from a missing test.
+        if candidate.is_absolute() or ".." in candidate.parts:
+            return False
+        base = repo.resolve()
+        return (base / candidate).resolve().is_relative_to(base)
+    except (TypeError, ValueError, OSError):
+        return False
+
+
 def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     """Check a recorded anchor against the repository, now.
 
@@ -265,13 +313,15 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
         malformed = [role for role, rec in entries.items()
                      if not isinstance(rec, dict)
                      or not isinstance(rec.get("commit"), str)
-                     or not isinstance(rec.get("path"), str)]
+                     or not isinstance(rec.get("path"), str)
+                     or not _inside(rec["path"], repo)]
         if malformed:
             out["status"] = "unverifiable"
             out["findings"].append(
                 "the anchor record is malformed: "
                 + ", ".join(f"the {role} entry does not name a commit and a "
-                            "path" for role in sorted(malformed)))
+                            "path inside this repository"
+                            for role in sorted(malformed)))
             return out
 
     if not isinstance(entries, dict) or "registration" not in entries:
@@ -296,8 +346,15 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
         # is the exception: it is the file the caller handed us, and
         # verifying a different one would answer a question nobody asked.
         disk = reg if role == "registration" else (repo / rel)
-        disk_bytes = disk.read_bytes() if disk.exists() else None
+        readable = _regular(disk)
+        disk_bytes = disk.read_bytes() if readable else None
         on_disk = _sha256(disk_bytes) if disk_bytes is not None else None
+        if disk.exists() and not readable:
+            broken = True
+            out["findings"].append(
+                f"the {role} path {rel} is not an ordinary file — an anchor "
+                "names records, and reading whatever else it points at is "
+                "how a record takes the machine with it")
         state = {
             "path": rel, "disk_path": str(disk), "commit": commit,
             "present": blob is not None,
@@ -417,7 +474,27 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
                 was = {}
             for role, before in was.items():
                 now = entries.get(role) if isinstance(entries, dict) else None
-                if not isinstance(before, dict) or not isinstance(now, dict):
+                if not isinstance(before, dict):
+                    continue                  # the COMMITTED copy is junk
+                if not isinstance(now, dict):
+                    # DELETION. An entry the committed sidecar attests to,
+                    # gone from the working copy, is the cheapest tamper of
+                    # all: the loop above simply has no work for that role,
+                    # and every check on it passes by not running. Removing
+                    # `test_look` also erased the ordering evidence and the
+                    # record still read intact, PASS, no findings.
+                    #
+                    # This is the fourth time the same shape has shipped —
+                    # an empty bar, a missing ledger, an empty entries
+                    # mapping, and now a deleted entry. Absence is not
+                    # innocence, and a check that does not run is not a
+                    # check that passed.
+                    broken = True
+                    out["findings"].append(
+                        f"the {role} entry was REMOVED from the anchor on "
+                        f"disk — it is attested by the committed record "
+                        f"({side_commit[:12]}…) and every check on it was "
+                        "skipped rather than performed")
                     continue
                 a, b = before.get("commit"), now.get("commit")
                 if isinstance(a, str) and isinstance(b, str) and a != b \

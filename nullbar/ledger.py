@@ -14,11 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
+
+try:                                   # POSIX only; Windows degrades below
+    import fcntl
+except ImportError:                    # pragma: no cover - platform dependent
+    fcntl = None                       # type: ignore[assignment]
 
 
 class TrialLedger:
@@ -36,21 +43,69 @@ class TrialLedger:
             json.dumps(params, sort_keys=True, default=str).encode()
         ).hexdigest()[:16]
 
+    # ── locking ─────────────────────────────────────────────────────────────
+    @contextmanager
+    def _lock(self, exclusive: bool):
+        """Hold an advisory lock on the ledger for the duration of a block.
+
+        Deduplication used to read the file, decide, and then append — three
+        steps with two gaps in them. Two workers recording the same
+        ``(name, params)`` both saw no row and both appended it, so an
+        identical pair became two trials and every deflation figure divided
+        by a number the search had not spent. Forcing the interleaving
+        reproduced it every time.
+
+        The lock is per open-file-description, so a caller holding the
+        exclusive lock must NOT re-enter through a locking read — that is
+        why ``_read_rows`` exists unlocked and ``record`` uses it directly.
+
+        Where ``fcntl`` is unavailable this degrades to the previous
+        behaviour rather than failing: single-process use is unaffected, and
+        the check that matters is documented as advisory either way.
+        """
+        if fcntl is None:                        # pragma: no cover
+            yield None
+            return
+        self.path.touch(exist_ok=True)
+        handle = self.path.open("r+")
+        try:
+            fcntl.flock(handle.fileno(),
+                        fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            yield handle
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
     # ── reading ─────────────────────────────────────────────────────────────
-    def _scan(self) -> list[dict[str, Any]]:
+    def _read_rows(self) -> list[dict[str, Any]]:
+        """Parse the file. NO locking — callers already holding one use this
+        directly; ``_scan`` is the locking wrapper."""
+        rows: list[dict[str, Any]] = []
+        if not self.path.exists():
+            return rows
+        with self.path.open() as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+        return rows
+
+    def _scan(self, force: bool = False) -> list[dict[str, Any]]:
         """Rows, cached. Re-reads only when the file has changed size, so
         recording N trials costs O(N) reads and not O(N^2) — a 20k-cell
         sweep spent ~10 minutes re-parsing its own ledger before this.
+
+        ``force`` skips the size heuristic. Size is a proxy for "changed"
+        and two different rows can serialise to the same length, so the
+        one place correctness depends on a fresh read — deduplication under
+        the write lock — does not get to trust a proxy.
         """
         size = self.path.stat().st_size if self.path.exists() else -1
-        if self._rows is None or size != self._size:
-            rows = []
-            if size >= 0:
-                with self.path.open() as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            rows.append(json.loads(line))
+        if force or self._rows is None or size != self._size:
+            with self._lock(exclusive=False):
+                rows = self._read_rows()
             self._rows, self._size = rows, size
         return self._rows
 
@@ -78,21 +133,33 @@ class TrialLedger:
         # trial — silently UNDERCOUNTING the search that every deflation
         # figure depends on.
         h = self._hash({"strategy": name, "params": params})
-        rows = self._scan()
-        # Dedupe on the semantic pair as well as the stored hash, so a ledger
-        # written by an older version still matches instead of appending a
-        # duplicate and inflating the count.
-        if any(r["hash"] == h
-               or (r.get("name") == name and r.get("params") == params)
-               for r in rows):
-            return h
-        row = {"hash": h, "name": name, "params": params, "note": note,
-               "metrics": dict(metrics) if metrics else {},
-               "at": datetime.now(timezone.utc).isoformat()}
-        with self.path.open("a") as f:
-            f.write(json.dumps(row, default=str) + "\n")
-        rows.append(row)
-        self._size = self.path.stat().st_size
+        # Read, decide and append under ONE exclusive lock. Split apart,
+        # two workers recording the same pair both saw no row and both
+        # wrote it: an identical pair became two trials, and the count
+        # every deflation figure divides by no longer described the search.
+        with self._lock(exclusive=True) as handle:
+            rows = self._read_rows()          # fresh, under the lock
+            # Dedupe on the semantic pair as well as the stored hash, so a
+            # ledger written by an older version still matches instead of
+            # appending a duplicate and inflating the count.
+            if any(r["hash"] == h
+                   or (r.get("name") == name and r.get("params") == params)
+                   for r in rows):
+                self._rows, self._size = rows, self.path.stat().st_size
+                return h
+            row = {"hash": h, "name": name, "params": params, "note": note,
+                   "metrics": dict(metrics) if metrics else {},
+                   "at": datetime.now(timezone.utc).isoformat()}
+            line = json.dumps(row, default=str) + "\n"
+            if handle is not None:
+                handle.seek(0, os.SEEK_END)   # the locked description
+                handle.write(line)
+                handle.flush()
+            else:                             # pragma: no cover - no fcntl
+                with self.path.open("a") as f:
+                    f.write(line)
+            rows.append(row)
+            self._rows, self._size = rows, self.path.stat().st_size
         return h
 
     # ── what deflation needs ────────────────────────────────────────────────

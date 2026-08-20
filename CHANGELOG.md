@@ -2,6 +2,47 @@
 
 All notable changes to this project. Dates are UTC.
 
+## [0.7.1] — 2026-08-20
+
+Three findings on the 0.7.0 tag, plus one this repo found by taking its own
+machine down with it.
+
+### Fixed
+
+- **Deleting an anchored entry still verified as intact.** The sidecar was
+  compared against its committed copy, but an entry present in the commit
+  and *absent* from the working file was skipped rather than rejected —
+  so removing `test_look` erased the ordering evidence and the record still
+  read `intact`, `PASS`, no findings, and `nullbar verify` still exited 0.
+  A removed entry is now `broken`. This is the fourth defect of one shape
+  in a week — an empty bar, a missing ledger, an empty `entries` mapping,
+  and now a deleted entry — and the shape is that **absence read as
+  innocence**: a check that does not run looks exactly like a check that
+  passed.
+- **Ledger deduplication was racy.** `record()` scanned, decided and
+  appended in three steps with two gaps in them, so two workers recording
+  the same `(name, params)` both saw no row and both wrote it — breaking
+  the documented "an identical pair is one trial" guarantee and inflating
+  the count every deflation figure divides by. Read, decide and append now
+  happen under one exclusive `flock`, with a forced re-read inside it
+  (the size-based cache is a proxy, and two rows can serialise to the same
+  length). Verified with 32 concurrent processes: an identical pair
+  collapses to one row, and 32 distinct pairs all survive.
+- **Verification read paths outside the repository.** `repo / rel` is not a
+  containment check: an absolute `rel` discards `repo` and `../` walks out
+  of it, so a crafted sidecar could make verification read arbitrary files
+  before returning any verdict. Every entry path must now be a relative
+  path that resolves inside the checkout, refused *before* anything is
+  opened.
+- **An unbounded read can no longer happen at all.** `exists()` is true of
+  a character device and `read_bytes()` on `/dev/zero` allocates until the
+  machine dies. Entries must now point at ordinary files. This is defence
+  in depth rather than a second containment check — it covers a device or
+  FIFO *inside* the repository, where containment has nothing to say, and
+  it holds when the path guard is regressed. It was found the hard way: a
+  mutation test that disabled the path guard drove exactly this path and
+  killed the machine three times, taking the editor session with it.
+
 ## [0.7.0] — 2026-08-20
 
 Eight ways a green PASS could be produced without the evidence to support

@@ -16,7 +16,7 @@ check hunt your leaks (leaklint). The held-out test is one look.
 Named for the two things it makes you commit to before you are allowed to
 believe a number: the NULL control and the pre-registered BAR.
 """
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 from .ledger import TrialLedger
 from .registration import (AlreadySpentError, AmbiguousConditionError,
