@@ -1542,3 +1542,54 @@ class TestThePublicSurface:
                 bar={"t": {"metric": "t", "op": ">=", "value": 9.0}},
                 cells_budget=1).freeze(p)
         assert not isinstance(ei.value, nullbar.AtomicPublishUnsupportedError)
+
+
+class TestValidJSONThatIsNotARecord:
+    """``null``, ``[]``, ``42`` and ``"a string"`` all PARSE. Because
+    parsing succeeds, every ``except ValueError`` upstream stays quiet and
+    the first attribute access dies instead — ``'list' object has no
+    attribute 'get'`` out of a function whose contract is to return a
+    verdict.
+
+    Fixed once in ``freeze()``, then written again in the same commit for
+    the committed anchor sidecar. One decoder now, and these tests cover
+    every site that uses it rather than the one that was reported.
+    """
+
+    SHAPES = ["[]", "null", "42", '"a string"', "true"]
+
+    @pytest.mark.parametrize("payload", SHAPES)
+    def test_a_registration_that_is_not_an_object(self, tmp_path, payload):
+        p = tmp_path / "r.json"
+        p.write_text(payload)
+        with pytest.raises(OSError, match="not an object"):
+            nullbar.Registration.load(p)
+
+    @pytest.mark.parametrize("payload", SHAPES)
+    def test_a_ledger_row_that_is_not_an_object(self, tmp_path, payload):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"hash":"a","name":"s","params":{},"note":"",'
+                     '"metrics":{}}\n' + payload + "\n")
+        with pytest.raises(OSError, match="not an object"):
+            nullbar.TrialLedger(p).count()
+
+    @pytest.mark.parametrize("payload", SHAPES)
+    def test_a_stamp_that_is_not_an_object_does_not_crash_the_report(
+            self, tmp_path, payload):
+        p = tmp_path / "r.json"
+        nullbar.Registration(
+            name="x", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        (tmp_path / "r.test_look.json").write_text(payload)
+        data = nullbar.report_data(p, sims=100)      # must not raise
+        assert data["verdict"]["status"] in ("INCOMPLETE", "CONTRADICTED")
+
+    def test_the_decoder_still_accepts_an_object(self):
+        from nullbar._records import loads_mapping
+        assert loads_mapping('{"a": 1}', "x") == {"a": 1}
+
+    def test_the_decoder_reports_bad_json_distinctly(self):
+        from nullbar._records import loads_mapping
+        with pytest.raises(OSError, match="not valid JSON"):
+            loads_mapping("{not json", "x")

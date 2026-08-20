@@ -1308,3 +1308,53 @@ class TestEveryCommitTargetIsCheckedFirst:
         out = verify_anchor(p)
         assert any("could not be decoded" in n for n in out["notes"]), \
             out["notes"]
+
+
+class TestACommittedSidecarThatIsNotAMapping:
+    """Valid JSON with no ``.get`` — the handler added for UNDECODABLE
+    sidecars assumed anything that decoded was a mapping."""
+
+    SHAPES = ["[]", "null", "42", '"a string"', "true"]
+
+    @pytest.mark.parametrize("payload", SHAPES)
+    def test_it_returns_a_verdict_with_the_note(self, tmp_path, payload):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        (tmp_path / "r.anchor.json").write_text(payload)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "junk"], cwd=tmp_path,
+                       check=True)
+        nullbar.anchor(p)                    # valid one in the working tree
+
+        out = verify_anchor(p)               # must not raise
+        assert out["status"] in ("intact", "broken")
+        assert any("no entry can be checked for having been moved" in n
+                   or "could not be decoded" in n for n in out["notes"]), \
+            out["notes"]
+
+    @pytest.mark.parametrize("payload", SHAPES)
+    def test_a_WORKING_sidecar_that_is_not_a_mapping_is_unverifiable(
+            self, tmp_path, payload):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        (tmp_path / "r.anchor.json").write_text(payload)
+        out = verify_anchor(p)
+        assert out["status"] == "unverifiable", out

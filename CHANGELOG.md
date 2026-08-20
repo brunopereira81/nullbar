@@ -20,6 +20,19 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **Valid JSON that is not a record crashed verification.** `null`, `[]`,
+  `42` and `"a string"` all PARSE — so every `except ValueError` upstream
+  stayed quiet and the first attribute access died instead, giving
+  `'list' object has no attribute 'get'` out of `verify_anchor`, whose
+  contract is to return a verdict. This was fixed once in `freeze()` and
+  then written again, **in the same commit**, for the committed anchor
+  sidecar. There is one decoder now — `loads_mapping`, raising
+  `RecordReadError` so the handlers that already catch unreadable records
+  catch this too — and every site that decodes a record uses it: the
+  registration, the stamp, each ledger row, and both sidecars. A ledger row
+  or a registration that is valid JSON but not an object was the same
+  latent crash, found by sweeping the ten `json.loads` call sites rather
+  than by patching the one that was reported.
 - **The hard-link fallback restored the race it removed.** Any link
   failure other than "the name is taken" fell back to `open("x")` — a
   create-then-write, which exposes the final filename before its contents:

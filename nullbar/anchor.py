@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import (MAX_RECORD_BYTES, RecordReadError, record_bytes,
-                       record_text)
+from ._records import (MAX_RECORD_BYTES, RecordReadError, loads_mapping,
+                       record_bytes, record_text)
 
 ANCHOR_SUFFIX = ".anchor.json"
 
@@ -378,7 +378,8 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     del rel
 
     try:
-        doc = json.loads(record_text(side, "anchor sidecar"))
+        doc = loads_mapping(record_text(side, "anchor sidecar"),
+                            "anchor sidecar")
         entries = doc["entries"]
         out["anchored_in"] = doc.get("repo")
     except (ValueError, OSError, KeyError, TypeError) as exc:
@@ -585,8 +586,10 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             # shrink the ledger, then aim the entry at a commit where it was
             # already that short.
             try:
-                was = (json.loads(side_blob.decode()).get("entries") or {})
-            except (ValueError, UnicodeDecodeError) as exc:
+                was = (loads_mapping(side_blob,
+                                     "committed anchor record").get("entries")
+                       or {})
+            except RecordReadError as exc:
                 # An undecodable COMMITTED sidecar leaves nothing to compare
                 # against, so the loop below has no iterations and every
                 # move goes undetected — in silence, which is the same

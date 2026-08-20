@@ -30,6 +30,7 @@ they have instead of becoming a traceback out of a new exception type.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 #: Generous by design — a 20k-cell ledger is a few megabytes. The cap is a
@@ -66,6 +67,34 @@ def check_record(path: Path, what: str = "record") -> Path:
             f"{MAX_RECORD_BYTES}-byte limit — a record is a small document, "
             "and this one is not being read whole")
     return path
+
+
+def loads_mapping(raw: str | bytes, what: str = "record") -> dict:
+    """``json.loads`` that REQUIRES a JSON object.
+
+    ``null``, ``[]``, ``42`` and ``"a string"`` are all valid JSON and none
+    of them is a record. Because parsing SUCCEEDS, every ``except
+    ValueError`` upstream stays quiet and the first attribute access dies
+    instead — ``'list' object has no attribute 'get'`` out of a function
+    whose contract is to return a verdict.
+
+    This was fixed once in ``freeze()`` and then written again, in the same
+    commit, for the committed anchor sidecar. So it is one function now,
+    and every site that decodes a record uses it.
+
+    Raises ``RecordReadError`` — an ``OSError``, so the handlers that
+    already catch unreadable records catch this too.
+    """
+    try:
+        doc = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RecordReadError(
+            f"the {what} is not valid JSON ({exc})") from None
+    if not isinstance(doc, dict):
+        raise RecordReadError(
+            f"the {what} is valid JSON but not an object "
+            f"({type(doc).__name__}) — a record is a mapping")
+    return doc
 
 
 def record_bytes(path: Path, what: str = "record") -> bytes:

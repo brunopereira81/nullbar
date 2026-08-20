@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from ._records import check_record
+from ._records import check_record, loads_mapping
 
 try:                                   # POSIX
     import fcntl
@@ -142,7 +142,10 @@ class TrialLedger:
             for line in f:
                 line = line.strip()
                 if line:
-                    rows.append(json.loads(line))
+                    # a row that is valid JSON but not an object is not a
+                    # trial; it would surface as an AttributeError on
+                    # .get() somewhere far from here
+                    rows.append(loads_mapping(line, "trial ledger row"))
         return rows
 
     def _scan(self, force: bool = False) -> list[dict[str, Any]]:

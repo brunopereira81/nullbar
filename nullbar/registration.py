@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import record_text
+from ._records import loads_mapping, record_text
 
 
 class AlreadySpentError(RuntimeError):
@@ -333,7 +333,7 @@ class Registration:
         p = Path(path)
         text = record_text(p, "registration")
         r = Registration.__new__(Registration)
-        r.doc = json.loads(text)
+        r.doc = loads_mapping(text, "registration")
         r.path = p
         r.sha256 = hashlib.sha256(text.encode()).hexdigest()
         return r
@@ -360,13 +360,14 @@ class Registration:
         text, on_disk = known if known is not None else self._read(p)
         in_memory = hashlib.sha256(self._payload().encode()).hexdigest()
         if on_disk != in_memory and \
-                self._promise(json.loads(text)) != self._promise(self.doc):
+                self._promise(loads_mapping(text, "registration")) \
+                != self._promise(self.doc):
             raise SealBrokenError(
                 f"{p} holds {on_disk[:16]}… but the registration in memory "
                 f"hashes to {in_memory[:16]}… — the design or the bar moved "
                 "after freezing. Grade the frozen file "
                 "(Registration.load(path)) or write a NEW registration.")
-        return json.loads(text)
+        return loads_mapping(text, "registration")
 
     def _stamp_path(self, reg_path: str | Path) -> Path:
         return Path(reg_path).with_suffix(".test_look.json")
@@ -393,7 +394,8 @@ class Registration:
         if stamp.exists():
             out["test_look_spent"] = True
             try:
-                out["stamp_bound"] = (json.loads(record_text(stamp, "test-look stamp"))
+                out["stamp_bound"] = (loads_mapping(
+                    record_text(stamp, "test-look stamp"), "stamp")
                                       .get("registration_sha256")
                                       == out["sha256"])
             except (ValueError, OSError):
