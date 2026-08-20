@@ -240,6 +240,11 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
                          "observed": observed if _finite(observed) else None,
                          "state": state, "source": source,
                          "detail": verdict["invalid"].get(name)})
+    if not doc["bar"]:
+        gaps.append("the registration promises NOTHING: its bar is empty, so "
+                    "there is no condition any result could fail. Freezing "
+                    "one is refused; this record predates that refusal or "
+                    "was written by hand")
     if verdict["missing"]:
         gaps.append("the record does not carry a grade for: "
                     + ", ".join(verdict["missing"]))

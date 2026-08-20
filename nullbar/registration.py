@@ -378,7 +378,14 @@ class Registration:
                       or int(n_trials) <= int(registered)}
 
         status = self.seal_status(p, known) if p is not None else None
-        return {"pass": (not missing and not failed
+        # ``bool(bar)`` is load-bearing. Freezing an empty bar is refused,
+        # but a registration frozen by an older version — or hand-written —
+        # still LOADS, and "no condition failed" is vacuously true of a
+        # promise that registered nothing. That graded a record whose only
+        # metric was t = -99 as a clean PASS. A registration that promises
+        # nothing cannot pass; the report reads it as INCOMPLETE, which is
+        # the honest answer: the record does not say.
+        return {"pass": (bool(bar) and not missing and not failed
                          and (budget is None or budget["ok"])),
                 "failed": failed, "missing": missing, "invalid": invalid,
                 "budget": budget, "graded": sorted(computed),

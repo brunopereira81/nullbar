@@ -26,7 +26,14 @@ after.
   The README promised the stronger rule and now states the real one.
 - **An empty bar was accepted and passed.** `Registration(bar={})` graded
   every result as PASS with zero conditions. Refused at construction: a
-  promise with nothing to satisfy is not a promise.
+  promise with nothing to satisfy is not a promise. Refusing at *freeze*
+  only closes the door going forward, though — a record frozen by an older
+  version, or written by hand, still loads, and "no condition failed" is
+  vacuously true of a promise that registered nothing, which graded a
+  result whose only metric was `t = -99` as a clean pass. Such a record
+  still loads, because refusing would mean nobody could inspect the record
+  most in need of inspection; it can no longer pass, and reads
+  **INCOMPLETE** — the record does not say.
 - **A malformed anchor verified as intact.** A sidecar containing
   `{"entries": {}}` returned `intact` because the checking loop had no work
   and every check passed vacuously. An anchor that does not name a

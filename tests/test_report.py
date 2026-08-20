@@ -499,6 +499,42 @@ class TestEvidenceMustSupportThePass:
         with pytest.raises(ValueError, match="at least one condition"):
             nullbar.Registration(name="z", hypothesis="h", design={}, bar={})
 
+    def _legacy_empty_bar(self, tmp_path):
+        """A record frozen BEFORE the refusal existed — or written by hand.
+
+        Refusing at freeze closes the door going forward; it does nothing
+        about records already on disk, and refusing to LOAD one would mean
+        nobody could inspect the record they most need to inspect.
+        """
+        p = tmp_path / "legacy.json"
+        p.write_text(json.dumps(
+            {"name": "legacy", "hypothesis": "h", "design": {}, "bar": {},
+             "created_at": "2026-01-01T00:00:00+00:00", "cells_budget": 1}))
+        return p
+
+    def test_a_legacy_empty_bar_record_still_loads(self, tmp_path):
+        p = self._legacy_empty_bar(tmp_path)
+        assert nullbar.Registration.load(p).doc["bar"] == {}
+
+    def test_a_legacy_empty_bar_cannot_pass_its_verdict(self, tmp_path):
+        # "no condition failed" is vacuously true of a promise that
+        # registered nothing, and graded a t of -99 as a clean pass
+        p = self._legacy_empty_bar(tmp_path)
+        reg = nullbar.Registration.load(p)
+        v = reg.verdict(results={"t": -99.0})
+        assert v["pass"] is False
+        assert v["failed"] == [] and v["missing"] == []
+
+    def test_a_legacy_empty_bar_reports_incomplete_not_pass(self, tmp_path):
+        p = self._legacy_empty_bar(tmp_path)
+        reg = nullbar.Registration.load(p)
+        (tmp_path / "legacy.test_look.json").write_text(json.dumps(
+            {"at": "2026-02-01T00:00:00+00:00", "results": {"t": -99.0},
+             "registration_sha256": reg.seal_status(p)["sha256"]}))
+        data = report_data(p, sims=500)
+        assert data["verdict"]["status"] == "INCOMPLETE"
+        assert any("promises NOTHING" in g for g in data["gaps"])
+
     def test_a_ledger_does_not_undercount_when_params_carry_a_name(self,
                                                                   tmp_path):
         # `{"name": name, **params}` let params["name"] overwrite the
