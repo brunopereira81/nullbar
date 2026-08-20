@@ -9,6 +9,29 @@ machine down with it.
 
 ### Fixed
 
+- **The lock opened the path before anything checked it.** The ledger's
+  guard sat in ``_read_rows``, one step too late: acquiring the lock had
+  already run ``touch()`` and ``open("r+")`` on whatever the path pointed
+  at. On a world-writable ``/dev/zero`` that happens to succeed and the
+  refusal arrives correctly — on a stricter box it raises ``PermissionError``
+  from the lock setup instead. A guard whose answer depends on the
+  permissions of a device node is not a guard. An existing path is validated
+  before the lock touches it; a ledger that does not exist yet is still
+  created.
+- **A committed blob was exempt from the size cap.** The working-tree read
+  was guarded and ``git cat-file blob`` was not, so a three-line sidecar
+  could name a huge historical blob and verification allocated all of it
+  before any guard saw a byte — the same unbounded read arriving from the
+  object database rather than the filesystem, the third route into one
+  function. The size is queried first (``git cat-file -s``) and refused
+  against the same cap.
+- **A refusal escaped as a traceback.** Guards were added inside the
+  verification loop with nothing there to catch them, so a record that
+  tripped one crashed ``nullbar verify`` and report generation instead of
+  reading ``broken``. Caught now — in the loop *and* in the sidecar
+  self-check below it, which the first version of this fix missed: the
+  instance fixed, the class not, which is the shape of nearly every entry
+  above it.
 - **The sidecar itself was read before any guard applied to it.** The
   previous entry hardened the paths `verify_anchor` *derives* and left the
   path it is *handed* wide open: the anchor record was parsed before the

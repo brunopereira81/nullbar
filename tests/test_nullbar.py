@@ -1220,3 +1220,39 @@ class TestTheLockGuaranteeIsNeverSilentlyDropped:
             cells_budget=1)
         with pytest.raises(OSError, match="not an ordinary file"):
             reg.seal_status(p)
+
+    def test_the_lock_does_not_open_the_path_before_checking_it(self,
+                                                                tmp_path):
+        """The guard was in ``_read_rows``, one step too late: acquiring the
+        lock already did ``touch()`` and ``open("r+")`` on whatever the path
+        pointed at. On a world-writable ``/dev/zero`` that happens to
+        succeed and the refusal arrives correctly; on a stricter box it
+        raises PermissionError from the lock setup instead. A guard whose
+        answer depends on the permissions of a device node is not a guard.
+        """
+        p = tmp_path / "t.jsonl"
+        p.symlink_to("/dev/zero")
+        led = nullbar.TrialLedger(p)
+        touched = []
+        real_touch, real_open = Path.touch, Path.open
+
+        def watched_touch(self, *a, **k):
+            touched.append(("touch", str(self)))
+            return real_touch(self, *a, **k)
+
+        def watched_open(self, *a, **k):
+            touched.append(("open", str(self)))
+            return real_open(self, *a, **k)
+
+        with mock.patch.object(Path, "touch", watched_touch), \
+                mock.patch.object(Path, "open", watched_open):
+            with pytest.raises(OSError, match="not an ordinary file"):
+                led.count()
+        assert not touched, f"opened the path before checking it: {touched}"
+
+    def test_a_ledger_that_does_not_exist_yet_is_still_created(self,
+                                                              tmp_path):
+        # the guard must not stop the first record from creating the file
+        led = nullbar.TrialLedger(tmp_path / "fresh.jsonl")
+        led.record("s", {"q": 1})
+        assert led.count() == 1

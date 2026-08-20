@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import (RecordReadError, check_record, record_bytes,
-                       record_text)
+from ._records import (MAX_RECORD_BYTES, RecordReadError, check_record,
+                       record_bytes, record_text)
 
 ANCHOR_SUFFIX = ".anchor.json"
 
@@ -97,7 +97,26 @@ def _sha256(data: bytes) -> str:
 
 
 def _blob(commit: str, rel: str, repo: Path) -> bytes | None:
-    """The committed bytes, or None if that path is not in that commit."""
+    """The committed bytes, or None if that path is not in that commit.
+
+    SIZE-CHECKED FIRST. The working-tree read is guarded, and this one was
+    not: a three-line sidecar can name a huge historical blob, and
+    ``git cat-file blob`` with ``capture_output=True`` allocates all of it
+    before any guard sees a byte. The same unbounded read, arriving from
+    the object database instead of the filesystem — the third route into
+    one function, after the entry paths and the sidecar itself.
+    """
+    try:
+        size_out = subprocess.run(
+            ["git", "cat-file", "-s", f"{commit}:{rel}"],
+            cwd=str(repo), capture_output=True, check=True, text=True)
+        size = int((size_out.stdout or "0").strip() or 0)
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+        return None
+    if size > MAX_RECORD_BYTES:
+        raise RecordReadError(
+            f"the blob {commit[:12]}…:{rel} is {size} bytes, over the "
+            f"{MAX_RECORD_BYTES}-byte limit — it is not being read whole")
     try:
         out = subprocess.run(["git", "cat-file", "blob", f"{commit}:{rel}"],
                              cwd=str(repo), capture_output=True, check=True)
@@ -364,15 +383,28 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     paths = role_paths(reg)
     for role, rec in entries.items():
         commit, rel = rec.get("commit", ""), rec.get("path", "")
-        blob = _blob(commit, rel, repo)
-        # Resolved from the path the anchor RECORDS, not from a filename
-        # convention — the ledger may be named anything, and an unknown
-        # role must be checked rather than waved through. The registration
-        # is the exception: it is the file the caller handed us, and
-        # verifying a different one would answer a question nobody asked.
-        disk = reg if role == "registration" else (repo / rel)
-        readable = _regular(disk)
-        disk_bytes = record_bytes(disk, role) if readable else None
+        # A refusal is a VERDICT — "we would not read that" — and must not
+        # escape as a traceback out of `nullbar verify` or report
+        # generation. The guards were added inside this loop without
+        # anything here to catch them, so a record that tripped one crashed
+        # instead of reading `broken`.
+        try:
+            blob = _blob(commit, rel, repo)
+            # Resolved from the path the anchor RECORDS, not from a filename
+            # convention — the ledger may be named anything, and an unknown
+            # role must be checked rather than waved through. The
+            # registration is the exception: it is the file the caller
+            # handed us, and verifying a different one would answer a
+            # question nobody asked.
+            disk = reg if role == "registration" else (repo / rel)
+            readable = _regular(disk)
+            disk_bytes = record_bytes(disk, role) if readable else None
+        except RecordReadError as exc:
+            broken = True
+            out["findings"].append(f"the {role} could not be read: {exc}")
+            out["entries"][role] = {"path": rel, "commit": commit,
+                                    "refused": str(exc)}
+            continue
         on_disk = _sha256(disk_bytes) if disk_bytes is not None else None
         if disk.exists() and not readable:
             broken = True
@@ -483,9 +515,21 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             "repository carries no anchor to check")
     else:
         side_commit = _last_commit(side_rel, repo)
-        side_blob = _blob(side_commit, side_rel, repo) if side_commit else None
-        if side_blob is not None and side_blob != record_bytes(
-                side, "anchor record"):
+        # Guarded like the loop above, and for the same reason: a refusal is
+        # a verdict, not a traceback. The loop got its `except` and this did
+        # not — the instance fixed, the class not — and an oversized sidecar
+        # blob crashed `nullbar verify` from three lines below the fix.
+        try:
+            side_blob = (_blob(side_commit, side_rel, repo)
+                         if side_commit else None)
+            side_disk = (record_bytes(side, "anchor record")
+                         if side_blob is not None else None)
+        except RecordReadError as exc:
+            broken = True
+            out["findings"].append(
+                f"the anchor record itself could not be read: {exc}")
+            side_blob = side_disk = None
+        if side_blob is not None and side_blob != side_disk:
             # Every claim above was read out of the working-tree sidecar,
             # which is the one file an editor can reach. Re-anchoring
             # legitimately rewrites it — but re-anchoring only ADDS roles or

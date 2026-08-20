@@ -937,3 +937,116 @@ class TestTheSidecarItselfIsGuarded:
         # check the anchor" — they are different answers
         p = self._repo(tmp_path)
         assert verify_anchor(p)["status"] == "unanchored"
+
+
+class TestARefusalIsAVerdictNotATraceback:
+    """Guards were added inside the verification loop with nothing there to
+    catch them, so a record that tripped one crashed ``nullbar verify`` and
+    report generation instead of reading ``broken``."""
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        led = tmp_path / "r.jsonl"
+        led.write_text("")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        nullbar.anchor(p, ledger=led)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "a"], cwd=tmp_path, check=True)
+        return p
+
+    def test_an_oversized_working_file_is_broken_not_a_crash(self, tmp_path):
+        """The cap has to sit BETWEEN the sidecar and the entry: patching it
+        to 1 trips the sidecar's own read first and returns `unverifiable`,
+        which is correct for that record and tests nothing about the loop.
+        """
+        from nullbar import _records
+        p = self._repo(tmp_path)
+        led = tmp_path / "r.jsonl"
+        led.write_text("x" * 20_000)
+        side_size = (tmp_path / "r.anchor.json").stat().st_size
+        assert side_size < 10_000 < 20_000
+        with mock.patch.object(_records, "MAX_RECORD_BYTES", 10_000):
+            out = verify_anchor(p)          # must not raise
+        assert out["status"] == "broken", out
+        assert any("could not be read" in f for f in out["findings"]), out
+
+    def test_an_oversized_COMMITTED_blob_is_refused_before_it_is_read(
+            self, tmp_path):
+        """A three-line sidecar can name a huge historical blob, and
+        ``git cat-file blob`` allocates all of it before any guard sees a
+        byte — the same unbounded read arriving from the object database
+        instead of the filesystem."""
+        # NOT `import nullbar.anchor as A`: the package re-exports `anchor`
+        # as a FUNCTION, so that binds the function and shadows the module.
+        import sys
+        A = sys.modules["nullbar.anchor"]
+        p = self._repo(tmp_path)
+        read = []
+        real = subprocess.run
+
+        def watched(cmd, *a, **k):
+            if len(cmd) > 2 and cmd[1] == "cat-file" and cmd[2] == "blob":
+                read.append(list(cmd))
+            return real(cmd, *a, **k)
+
+        # A cap of 1 would refuse everything including the sidecar's own
+        # blob; the point is that the OVERSIZED one specifically is never
+        # fetched while ordinary ones still are.
+        (tmp_path / "r.jsonl").write_text("x" * 20_000)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "big"], cwd=tmp_path,
+                       check=True)
+        nullbar.anchor(p, ledger=tmp_path / "r.jsonl")
+
+        # only anchor's own name is patched, so the SIDECAR read (which uses
+        # _records.MAX_RECORD_BYTES) is unaffected and the loop is reached
+        with mock.patch.object(A, "MAX_RECORD_BYTES", 10_000), \
+                mock.patch("subprocess.run", watched):
+            out = verify_anchor(p)
+        assert out["status"] == "broken", out
+        assert not any("r.jsonl" in c[-1] for c in read), \
+            f"fetched the oversized blob: {read}"
+        assert read, "fetched nothing at all — the cap refused everything"
+
+    def test_a_refusal_in_the_SIDECAR_SELF_CHECK_is_caught_too(self,
+                                                               tmp_path):
+        """The loop got its ``except`` and the self-check below it did not —
+        the instance fixed, the class not — so an oversized sidecar blob
+        crashed ``nullbar verify`` from three lines past the fix. Reaching
+        it needs the sidecar's own committed blob over the cap while the
+        entry blobs stay under, which is why it is its own test.
+        """
+        import sys
+        A = sys.modules["nullbar.anchor"]
+        p = self._repo(tmp_path)
+        side = tmp_path / "r.anchor.json"
+        doc = json.loads(side.read_text())
+        doc["_padding"] = "x" * 20_000          # blob well over the cap
+        side.write_text(json.dumps(doc))
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "pad"], cwd=tmp_path,
+                       check=True)
+        assert side.stat().st_size > 15_000
+
+        # _records' cap is untouched, so the sidecar still PARSES and the
+        # loop still runs; only _blob refuses, in the self-check
+        with mock.patch.object(A, "MAX_RECORD_BYTES", 10_000):
+            out = verify_anchor(p)              # must not raise
+        assert out["status"] == "broken", out
+        assert any("anchor record itself could not be read" in f
+                   for f in out["findings"]), out["findings"]
+
+    def test_an_ordinary_record_is_untouched_by_the_cap(self, tmp_path):
+        p = self._repo(tmp_path)
+        assert verify_anchor(p)["status"] in ("intact", "broken")
+        assert not any("could not be read" in f
+                       for f in verify_anchor(p)["findings"])

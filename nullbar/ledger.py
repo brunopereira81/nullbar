@@ -94,7 +94,17 @@ class TrialLedger:
         if not HAVE_LOCKING:                     # pragma: no cover
             yield None                           # opted in at construction
             return
-        self.path.touch(exist_ok=True)
+        # Validate BEFORE touching or opening. The guard lived in
+        # _read_rows, one step too late: acquiring the lock already did
+        # touch() and open("r+") on whatever the path pointed at. On a
+        # world-writable /dev/zero that happens to succeed and the refusal
+        # arrives correctly; on a stricter box it raises PermissionError
+        # from the lock setup instead. A guard whose answer depends on the
+        # permissions of a device node is not a guard.
+        if self.path.exists():
+            check_record(self.path, "trial ledger")
+        else:
+            self.path.touch(exist_ok=True)
         handle = self.path.open("r+")
         try:
             if fcntl is not None:
