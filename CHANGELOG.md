@@ -20,6 +20,25 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **A malformed bar spec could produce a WRONG GREEN.** The first defect
+  in this release that changes a verdict rather than crashing. `abs` was
+  read with a bare truth test, so `abs: "false"` is TRUE — a result of
+  `-9.0` then PASSED a `>= 3.0` bar it should have failed, silently and in
+  green, which is the one outcome this library exists to prevent. Only the
+  PRESENCE of `metric`, `op` and `value` had ever been checked, never their
+  types, so `op: []` and `metric: []` also came out as raw
+  `TypeError: unhashable type` from inside grading and `value: []` from
+  `float()`. `metric` and `op` must now be strings, `op` a known operator,
+  `value` a finite number (not a numeric string, not a bool, not NaN or
+  infinity), and `abs` a real boolean.
+
+  Underneath it: there were TWO rule sets — one in `__init__` for bars
+  built in code, one in the loader for bars read off disk — and they
+  checked different things. There is one now, returning a problem rather
+  than raising, so each caller keeps the exception type that suits it
+  (`ValueError`/`TypeError` for a bar written in code, `RecordReadError`
+  for one read from a file) while the rules cannot drift apart again. A
+  test asserts the two paths agree on every case.
 - **Parsing a record is not validating it.** Everything above answers
   layer one — *can I read this file* — and nothing answered layer two: *is
   this the kind of record I expect*. So `{}` loaded happily and

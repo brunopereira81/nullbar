@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -104,6 +105,62 @@ def _condition_state(value: Any) -> str:
     return "invalid"
 
 
+def bar_spec_problem(cond: Any, req: Any) -> tuple[type, str] | None:
+    """The ONE rule set for a bar requirement: (exception type, message).
+
+    There were two — one in ``__init__`` for bars built in code and one in
+    ``validate_registration`` for bars read off disk — and they checked
+    different things. Only the required KEYS were checked, never their
+    types, so ``op: []`` and ``metric: []`` came out as raw
+    ``TypeError: unhashable type`` from inside grading, and ``value: []``
+    from ``float()``.
+
+    Worse, and the reason this is not merely a crash: ``abs`` was read with
+    a bare truth test, so ``abs: "false"`` is TRUE. A result of -9.0 then
+    passed a ``>= 3.0`` bar it should have failed — a wrong GREEN, which is
+    the one outcome this library exists to prevent. ``abs`` must be a real
+    boolean.
+
+    Returns None when the requirement is usable. Callers raise their own
+    exception type — a ValueError for a bar written in code, a
+    RecordReadError for one read from a file — from a single set of rules,
+    so the two can no longer drift.
+    """
+    if isinstance(req, str):
+        return None                        # prose: graded by the caller
+    if not isinstance(req, dict):
+        return (TypeError,
+                f"bar[{cond!r}] must be a string or a spec dict, got "
+                f"{type(req).__name__}")
+    missing = {"metric", "op", "value"} - set(req)
+    if missing:
+        return (ValueError, f"bar[{cond!r}] spec is missing {sorted(missing)}")
+    if not isinstance(req["metric"], str):
+        return (TypeError,
+                f"bar[{cond!r}] metric must be a string, got "
+                f"{type(req['metric']).__name__}")
+    if not isinstance(req["op"], str):
+        return (TypeError,
+                f"bar[{cond!r}] op must be a string, got "
+                f"{type(req['op']).__name__}")
+    if req["op"] not in _OPS:
+        return (ValueError,
+                f"bar[{cond!r}] op {req['op']!r} is not one of {sorted(_OPS)}")
+    value = req["value"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value):
+        return (ValueError,
+                f"bar[{cond!r}] value {value!r} is not a finite number — a "
+                "threshold nothing can be compared against is not a bar")
+    if "abs" in req and not isinstance(req["abs"], bool):
+        return (TypeError,
+                f"bar[{cond!r}] abs must be true or false, got "
+                f"{req['abs']!r} ({type(req['abs']).__name__}) — anything "
+                "non-empty reads as TRUE, so a negative result would pass "
+                "an absolute-value condition it should fail")
+    return None
+
+
 def validate_registration(doc: dict, what: str = "registration") -> dict:
     """LAYER 2: is this parsed object actually a registration?
 
@@ -138,21 +195,9 @@ def validate_registration(doc: dict, what: str = "registration") -> dict:
             f"the {what}'s 'bar' is a {type(bar).__name__}, not a mapping "
             "of condition-name to requirement")
     for cond, req in bar.items():
-        if isinstance(req, str):
-            continue                       # prose: graded by the caller
-        if not isinstance(req, dict):
-            raise RecordReadError(
-                f"the {what}'s bar[{cond!r}] is a {type(req).__name__} — a "
-                "requirement is a prose string or a spec mapping")
-        missing = {"metric", "op", "value"} - set(req)
-        if missing:
-            raise RecordReadError(
-                f"the {what}'s bar[{cond!r}] is missing {sorted(missing)} — "
-                "a spec needs a metric, an op and a value")
-        if req["op"] not in _OPS:
-            raise RecordReadError(
-                f"the {what}'s bar[{cond!r}] op {req['op']!r} is not one of "
-                f"{sorted(_OPS)}")
+        problem = bar_spec_problem(cond, req)
+        if problem is not None:
+            raise RecordReadError(f"the {what}'s {problem[1]}")
     for field, kind in (("name", str), ("hypothesis", str),
                         ("created_at", str), ("design", dict)):
         if field in doc and not isinstance(doc[field], kind):
@@ -262,18 +307,9 @@ class Registration:
                 "with nothing to satisfy grades every result as PASS, which "
                 "is the opposite of what freezing a bar is for")
         for cond, req in bar.items():
-            if isinstance(req, dict):
-                missing = {"metric", "op", "value"} - set(req)
-                if missing:
-                    raise ValueError(f"bar[{cond!r}] spec is missing "
-                                     f"{sorted(missing)}")
-                if req["op"] not in _OPS:
-                    raise ValueError(
-                        f"bar[{cond!r}] op {req['op']!r} is not one of "
-                        f"{sorted(_OPS)}")
-            elif not isinstance(req, str):
-                raise TypeError(f"bar[{cond!r}] must be a string or a spec "
-                                f"dict, got {type(req).__name__}")
+            problem = bar_spec_problem(cond, req)
+            if problem is not None:
+                raise problem[0](problem[1])
         self.doc: dict[str, Any] = {
             "name": name,
             "hypothesis": hypothesis,

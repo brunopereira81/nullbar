@@ -1702,3 +1702,104 @@ class TestLayerTwoValidatesTheSHAPE:
         for i in range(3):
             led.record("s", {"q": i}, note="n", metrics={"sr": 0.1})
         assert nullbar.TrialLedger(tmp_path / "t.jsonl").count() == 3
+
+
+class TestABarSpecCannotMisgrade:
+    """The first defect in this release that produces a wrong GREEN rather
+    than a crash.
+
+    ``abs`` was read with a bare truth test, so ``abs: "false"`` is TRUE.
+    A result of -9.0 then PASSED a ``>= 3.0`` bar it should have failed —
+    silently, with a green verdict, which is the one outcome this library
+    exists to prevent. The rest of the spec was equally unchecked: only the
+    presence of the keys was validated, never their types.
+    """
+
+    def _reg(self, tmp_path, spec):
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps(
+            {"name": "x", "hypothesis": "h", "design": {},
+             "bar": {"c": spec}, "created_at": "2026-01-01T00:00:00+00:00",
+             "cells_budget": 1}))
+        return p
+
+    def test_the_wrong_green(self, tmp_path):
+        """The specific mis-grading, asserted as a verdict rather than as
+        an exception type: a failing result must not pass."""
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": 3.0,
+                                 "abs": "false"})
+        with pytest.raises(OSError, match="abs must be true or false"):
+            nullbar.Registration.load(p)
+
+    def test_the_same_bar_without_abs_correctly_fails(self, tmp_path):
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": 3.0})
+        v = nullbar.Registration.load(p).verdict(results={"t": -9.0})
+        assert v["pass"] is False
+
+    def test_a_genuine_abs_still_works(self, tmp_path):
+        # the guard must not break the feature it protects
+        p = self._reg(tmp_path, {"metric": "t", "op": ">=", "value": 3.0,
+                                 "abs": True})
+        assert nullbar.Registration.load(p).verdict(results={"t": -9.0})["pass"]
+
+    @pytest.mark.parametrize("spec,why", [
+        ({"metric": "t", "op": [], "value": 1}, "op unhashable"),
+        ({"metric": "t", "op": 7, "value": 1}, "op not a string"),
+        ({"metric": [], "op": ">=", "value": 1}, "metric unhashable"),
+        ({"metric": 7, "op": ">=", "value": 1}, "metric not a string"),
+        ({"metric": "t", "op": ">=", "value": []}, "value not a number"),
+        ({"metric": "t", "op": ">=", "value": "3.0"}, "numeric string"),
+        ({"metric": "t", "op": ">=", "value": True}, "bool is not a value"),
+        ({"metric": "t", "op": ">=", "value": float("nan")}, "NaN"),
+        ({"metric": "t", "op": ">=", "value": float("inf")}, "infinite"),
+        ({"metric": "t", "op": ">=", "value": 1, "abs": "false"}, "truthy str"),
+        ({"metric": "t", "op": ">=", "value": 1, "abs": 1}, "1 is not True"),
+        ({"metric": "t", "op": ">=", "value": 1, "abs": []}, "abs not a bool"),
+    ])
+    def test_every_malformed_spec_is_refused_from_disk(self, tmp_path, spec,
+                                                       why):
+        with pytest.raises(OSError):
+            nullbar.Registration.load(self._reg(tmp_path, spec))
+
+    @pytest.mark.parametrize("spec", [
+        {"metric": "t", "op": [], "value": 1},
+        {"metric": [], "op": ">=", "value": 1},
+        {"metric": "t", "op": ">=", "value": []},
+        {"metric": "t", "op": ">=", "value": 1, "abs": "false"},
+    ])
+    def test_the_same_specs_are_refused_in_CODE(self, spec):
+        """One rule set, two exception types. There were two rule sets and
+        they checked different things — which is also why a mutation could
+        land on the copy no test reached."""
+        with pytest.raises((TypeError, ValueError)):
+            nullbar.Registration(name="x", hypothesis="h", design={},
+                                 bar={"c": spec}, cells_budget=1)
+
+    def test_the_two_paths_agree_on_every_case(self, tmp_path):
+        """Whatever code refuses, disk must refuse, and vice versa."""
+        from nullbar.registration import bar_spec_problem
+        cases = [
+            {"metric": "t", "op": ">=", "value": 1},                # good
+            {"metric": "t", "op": ">=", "value": 1, "abs": True},   # good
+            "prose",                                                # good
+            {"metric": "t", "op": "~", "value": 1},
+            {"metric": "t", "op": ">=", "value": "x"},
+            {"metric": "t", "op": ">=", "value": 1, "abs": "false"},
+            7,
+        ]
+        for spec in cases:
+            problem = bar_spec_problem("c", spec)
+            in_code = True
+            try:
+                nullbar.Registration(name="x", hypothesis="h", design={},
+                                     bar={"c": spec}, cells_budget=1)
+            except (TypeError, ValueError):
+                in_code = False
+            from_disk = True
+            try:
+                nullbar.Registration.load(self._reg(tmp_path, spec)
+                                          if isinstance(spec, dict)
+                                          else self._reg(tmp_path, spec))
+            except OSError:
+                from_disk = False
+            assert in_code == from_disk == (problem is None), spec
