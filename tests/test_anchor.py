@@ -1050,3 +1050,82 @@ class TestARefusalIsAVerdictNotATraceback:
         assert verify_anchor(p)["status"] in ("intact", "broken")
         assert not any("could not be read" in f
                        for f in verify_anchor(p)["findings"])
+
+
+class TestTrackedIsNotCommitted:
+    """``git ls-files`` counts a STAGED file, and a freshly ``git add``ed
+    sidecar has no commit touching it — so ``_last_commit`` returned None,
+    the self-check was skipped, and the record read ``intact`` with nothing
+    said, while a clone would carry no anchor at all."""
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "r.json"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        nullbar.anchor(p)
+        return p
+
+    def test_a_staged_sidecar_warns_like_an_untracked_one(self, tmp_path):
+        p = self._repo(tmp_path)
+        subprocess.run(["git", "add", "r.anchor.json"], cwd=tmp_path,
+                       check=True)          # staged, never committed
+        out = verify_anchor(p)
+        assert any("is not committed" in n for n in out["notes"]), out["notes"]
+
+    def test_an_untracked_sidecar_still_warns(self, tmp_path):
+        p = self._repo(tmp_path)             # not even added
+        out = verify_anchor(p)
+        assert any("is not committed" in n for n in out["notes"]), out["notes"]
+
+    def test_a_committed_sidecar_does_not(self, tmp_path):
+        p = self._repo(tmp_path)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "a"], cwd=tmp_path, check=True)
+        out = verify_anchor(p)
+        assert not any("is not committed" in n for n in out["notes"]), out
+
+
+class TestTheCLIAnswersInsteadOfCrashing:
+    def _repo_with_oversized(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        big = tmp_path / "big.json"
+        with big.open("wb") as f:
+            f.truncate(300 * 1024 * 1024)     # sparse: no disk cost
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        return big
+
+    def test_anchor_prints_the_refusal(self, tmp_path, capsys):
+        big = self._repo_with_oversized(tmp_path)
+        assert cli.main(["anchor", str(big)]) == 2
+        assert "over the" in capsys.readouterr().err
+
+    def test_anchor_on_a_device_prints_the_refusal(self, tmp_path, capsys):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        link = tmp_path / "reg.json"
+        link.symlink_to("/dev/zero")
+        assert cli.main(["anchor", str(link)]) == 2
+        assert "nullbar anchor:" in capsys.readouterr().err
+
+    def test_verify_reports_a_git_failure_instead_of_raising(self, tmp_path,
+                                                             capsys):
+        import sys as _sys
+        A = _sys.modules["nullbar.anchor"]
+        p = tmp_path / "r.json"
+        p.write_text("{}")
+        (tmp_path / "r.anchor.json").write_text("{}")
+        with mock.patch.object(A, "verify_anchor",
+                               side_effect=A.GitError("object store gone")):
+            with mock.patch.dict(_sys.modules):
+                assert cli.main(["verify", str(p)]) == 2
+        assert "could not check the anchor" in capsys.readouterr().err

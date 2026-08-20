@@ -94,6 +94,14 @@ def _anchor(argv: list[str]) -> int:
     except GitError as exc:
         print(f"nullbar anchor: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:
+        # RecordReadError lands here (it subclasses OSError), and so does a
+        # permission or I/O failure on any of the files being anchored. A
+        # refusal is an answer the CLI should PRINT — an oversized or
+        # non-regular registration produced a traceback instead, which is
+        # the same "a verdict escaped as a crash" the verifier had.
+        print(f"nullbar anchor: {exc}", file=sys.stderr)
+        return 2
     for role, entry in doc["entries"].items():
         print(f"{role}: {entry['commit'][:12]} {entry['path']}")
     for hole in doc.get("uncovered") or []:
@@ -113,8 +121,17 @@ def _verify(argv: list[str]) -> int:
     ap.add_argument("registration")
     args = ap.parse_args(argv)
 
-    from .anchor import verify_anchor
-    result = verify_anchor(args.registration)
+    from .anchor import GitError, verify_anchor
+    try:
+        result = verify_anchor(args.registration)
+    except (GitError, OSError) as exc:
+        # verify_anchor handles the refusals it knows about, but git itself
+        # can still fail underneath it (a corrupt object store, a missing
+        # ref) and this caught nothing at all. "Could not check" is a
+        # non-zero answer, not a stack trace.
+        print(f"nullbar verify: could not check the anchor: {exc}",
+              file=sys.stderr)
+        return 2
     print(f"anchor: {result['status']}"
           + ("" if result["witnessed"] else "  (local only)"))
     for finding in result["findings"]:

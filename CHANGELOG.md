@@ -9,6 +9,21 @@ machine down with it.
 
 ### Fixed
 
+- **A staged sidecar reported `intact` with nothing said.** `git ls-files`
+  counts a STAGED file, so a freshly `git add`ed anchor record passed the
+  tracked check while `_last_commit` returned None — the self-check was
+  skipped and the record read clean, although a clone would carry no anchor
+  at all. Tracked and committed are now the same question, because they mean
+  the same thing to a reader.
+- **The CLI answers instead of crashing.** `nullbar anchor` caught
+  `FileNotFoundError` and `GitError` and nothing else, so an oversized or
+  non-regular registration produced a traceback where a printed refusal
+  belonged — the same "a verdict escaped as a crash" the verifier had.
+  `nullbar verify` caught nothing whatsoever, and git can still fail
+  underneath it. Both print and exit 2 now. A third case surfaced while
+  testing it: `anchor()` on a path resolving OUT of the repository raised a
+  bare `ValueError` from inside pathlib, which no message explained; it
+  refuses in the verifier's own vocabulary now.
 - **The lock opened the path before anything checked it.** The ledger's
   guard sat in ``_read_rows``, one step too late: acquiring the lock had
   already run ``touch()`` and ``open("r+")`` on whatever the path pointed

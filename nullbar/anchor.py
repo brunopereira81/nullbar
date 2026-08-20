@@ -142,7 +142,17 @@ def _remotes_containing(commit: str, repo: Path) -> list[str]:
 
 
 def _entry(path: Path, repo: Path) -> dict[str, Any]:
-    rel = path.resolve().relative_to(repo.resolve()).as_posix()
+    # A path that resolves OUT of the repository — a symlink to /dev/zero,
+    # say — made `relative_to` raise a bare ValueError from deep inside
+    # pathlib, which nothing caught and no message explained. The verifier
+    # already refuses this case in its own vocabulary; anchoring should
+    # say the same thing rather than crash.
+    try:
+        rel = path.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        raise GitError(
+            f"{path} resolves outside the repository at {repo} — an anchor "
+            "records files in the repository it attests to") from None
     commit = _last_commit(rel, repo)
     if commit is None:
         raise GitError(
@@ -509,19 +519,26 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
 
     # ── the sidecar itself ──────────────────────────────────────────────
     side_rel = side.resolve().relative_to(repo.resolve()).as_posix()
-    if not _ok(["ls-files", "--error-unmatch", "--", side_rel], repo):
+    # TRACKED is not COMMITTED. `git ls-files` counts a staged file, and a
+    # freshly `git add`ed sidecar has no commit touching it yet — so
+    # `_last_commit` returned None, the self-check below was skipped, and
+    # the record read `intact` with nothing said, while a clone would carry
+    # no anchor at all. Both conditions now say the same thing, because
+    # they mean the same thing to the reader.
+    side_commit = (_last_commit(side_rel, repo)
+                   if _ok(["ls-files", "--error-unmatch", "--", side_rel],
+                          repo) else None)
+    if side_commit is None:
         out["notes"].append(
             "the anchor record itself is not committed, so a clone of this "
             "repository carries no anchor to check")
     else:
-        side_commit = _last_commit(side_rel, repo)
         # Guarded like the loop above, and for the same reason: a refusal is
         # a verdict, not a traceback. The loop got its `except` and this did
         # not — the instance fixed, the class not — and an oversized sidecar
         # blob crashed `nullbar verify` from three lines below the fix.
         try:
-            side_blob = (_blob(side_commit, side_rel, repo)
-                         if side_commit else None)
+            side_blob = _blob(side_commit, side_rel, repo)
             side_disk = (record_bytes(side, "anchor record")
                          if side_blob is not None else None)
         except RecordReadError as exc:
