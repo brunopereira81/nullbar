@@ -65,8 +65,19 @@ def block_cluster_eval(mask: pd.DataFrame, fwd: pd.DataFrame,
                 "cluster_mean": float("nan"), "t": float("nan"),
                 "per_year": {}}
     t, cmean, n = clustered_t(df["fwd"], df["block"])
+    # Grouped by the DECISION timestamp, not the block label. `floor` is
+    # epoch-aligned, so a block's left edge is not a calendar boundary: at
+    # block="720h" a decision taken on 2 January is labelled 8 December and
+    # counted in the previous year — 3.8% of hours over a 2019-2026 span
+    # (1.3% at 336h, 0.8% at 168h, 0 at 24h, which is why this survived).
+    #
+    # It changes only the per-year BREAKDOWN: clustering, the pooled mean
+    # and t are all computed on `block` and are unaffected. But a per-year
+    # table is read as "did this hold up in each regime", and answering
+    # that with a trade filed under the wrong year is a misreport of the
+    # one number a reader uses to judge robustness.
     per_year = {int(y): float(g.mean()) for y, g in
-                df.groupby(pd.DatetimeIndex(df["block"]).year)["fwd"]}
+                df.groupby(pd.DatetimeIndex(df["time"]).year)["fwd"]}
     return {"trades": int(len(df)), "clusters": n,
             "gross": float(df["fwd"].mean()), "cluster_mean": cmean,
             "t": t, "per_year": per_year}

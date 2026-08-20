@@ -1803,3 +1803,70 @@ class TestABarSpecCannotMisgrade:
             except OSError:
                 from_disk = False
             assert in_code == from_disk == (problem is None), spec
+
+
+class TestPerYearUsesTheDecisionTimestamp:
+    """``floor`` is EPOCH-aligned, so a block's left edge is not a calendar
+    boundary. At ``block="720h"`` a decision taken on 2 January is labelled
+    8 December and counted in the previous year.
+
+    It survived because the default block is ``24h``, and 24h blocks are
+    aligned to midnight UTC — which is exactly where a calendar year starts,
+    so the two conventions agree perfectly there and disagree everywhere
+    else: 0.79% of hours at 168h, 1.30% at 336h, 3.83% at 720h over a
+    2019-2026 span.
+
+    Clustering, the pooled mean and t are all computed on ``block`` and are
+    unaffected. Only the per-year BREAKDOWN moves — and that table is read
+    as "did this hold up in each regime", which is exactly the question a
+    trade filed under the wrong year misanswers.
+    """
+
+    def _frames(self):
+        """Two assets entering on opposite sides of a New Year.
+
+        ``_entries`` keeps ONE entry per asset per block, so a single asset
+        cannot straddle — the straddle is across assets, which is exactly
+        how it arises on a real universe.
+        """
+        idx = pd.date_range("2025-12-15", "2026-01-20", freq="24h", tz="UTC")
+        dec = pd.Timestamp("2025-12-28", tz="UTC")
+        jan = pd.Timestamp("2026-01-02", tz="UTC")
+        mask = pd.DataFrame(False, index=idx, columns=["A", "B"])
+        mask.loc[dec, "A"] = True          # 2025 decision
+        mask.loc[jan, "B"] = True          # 2026 decision
+        fwd = pd.DataFrame(0.0, index=idx, columns=["A", "B"])
+        fwd.loc[dec, "A"] = -1.0           # 2025 loses
+        fwd.loc[jan, "B"] = 3.0            # 2026 wins
+        return mask, fwd
+
+    def test_a_decision_is_counted_in_its_own_year(self):
+        mask, fwd = self._frames()
+        per_year = nullbar.block_cluster_eval(mask, fwd,
+                                              block="720h")["per_year"]
+        assert set(per_year) == {2025, 2026}, per_year
+        assert per_year[2025] < 0 and per_year[2026] > 0, per_year
+
+    def test_the_pooled_numbers_are_untouched(self):
+        # the fix must move the breakdown and nothing else
+        mask, fwd = self._frames()
+        res = nullbar.block_cluster_eval(mask, fwd, block="720h")
+        assert res["trades"] == 2                      # one per asset
+        assert res["gross"] == pytest.approx((-1.0 + 3.0) / 2)
+
+    def test_the_24h_default_is_unchanged(self):
+        """24h blocks align to midnight UTC, which is where a year starts —
+        the two conventions agree exactly, which is why this was invisible.
+        """
+        mask, fwd = self._frames()
+        per_year = nullbar.block_cluster_eval(mask, fwd, block="24h")["per_year"]
+        assert per_year[2025] == pytest.approx(-1.0)
+        assert per_year[2026] == pytest.approx(3.0)
+
+    def test_a_block_straddling_new_year_splits_its_decisions(self):
+        mask, fwd = self._frames()
+        from nullbar.evaluate import _entries
+        df = _entries(mask, fwd, "720h")
+        straddling = [b for b, g in df.groupby("block")
+                      if pd.DatetimeIndex(g["time"]).year.nunique() > 1]
+        assert straddling, "the fixture must contain a straddling block"

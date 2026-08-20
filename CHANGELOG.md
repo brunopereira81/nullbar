@@ -20,6 +20,18 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **The per-year breakdown filed trades under the wrong year.**
+  `block_cluster_eval` grouped by the block's LEFT EDGE, and `floor` is
+  epoch-aligned, so a block boundary is not a calendar boundary: at
+  `block="720h"` a decision taken on 2 January is labelled 8 December and
+  counted in the previous year. Measured over a 2019-2026 span, the two
+  conventions disagree on 0.79% of hours at 168h, 1.30% at 336h and 3.83%
+  at 720h — and **0.00% at the 24h default**, which is why it went unseen:
+  24h blocks align to midnight UTC, exactly where a calendar year starts.
+  Grouped by the decision timestamp now. Clustering, the pooled mean and
+  `t` are computed on `block` and are unchanged; only the breakdown moves,
+  and that table is what a reader uses to judge whether a result held up in
+  each regime.
 - **A malformed bar spec could produce a WRONG GREEN.** The first defect
   in this release that changes a verdict rather than crashing. `abs` was
   read with a bare truth test, so `abs: "false"` is TRUE — a result of
