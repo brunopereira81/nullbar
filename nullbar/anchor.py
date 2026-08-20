@@ -586,8 +586,17 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
             # already that short.
             try:
                 was = (json.loads(side_blob.decode()).get("entries") or {})
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError) as exc:
+                # An undecodable COMMITTED sidecar leaves nothing to compare
+                # against, so the loop below has no iterations and every
+                # move goes undetected — in silence, which is the same
+                # shape as the junk-ENTRY case handled inside it. Found by
+                # sweeping for this class rather than by hitting it.
                 was = {}
+                out["notes"].append(
+                    "the committed anchor record could not be decoded "
+                    f"({exc}), so no entry can be checked for having been "
+                    "moved")
             for role, before in was.items():
                 now = entries.get(role) if isinstance(entries, dict) else None
                 if not isinstance(before, dict):

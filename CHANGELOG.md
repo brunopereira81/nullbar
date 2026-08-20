@@ -20,6 +20,19 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **The hard-link fallback restored the race it removed.** Any link
+  failure other than "the name is taken" fell back to `open("x")` — a
+  create-then-write, which exposes the final filename before its contents:
+  the exact race the atomic helper promises to remove, reinstated inside
+  the helper. This is the same silent downgrade this release already fixed
+  once in the ledger's lock, written four hours later in another file, and
+  a comment about that first one is three modules away. Publication now
+  FAILS CLOSED, raising `AtomicPublishUnsupportedError`, with
+  `freeze(..., allow_nonatomic=True)` putting the accepted weakening in the
+  caller's code. Every route into the fallback is covered, not only the
+  reported one. A sweep for the same class across the package then found
+  one more: an undecodable *committed* sidecar set `was = {}` and left the
+  move-detection loop with nothing to iterate, silently.
 - **A half-written registration was visible under its final name.**
   `open("x")` gives exclusivity and NOT atomicity: the name appears the
   moment it is created, before a byte is written, so a concurrent `freeze()`

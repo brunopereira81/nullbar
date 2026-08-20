@@ -1323,19 +1323,39 @@ class TestTheLockGuaranteeIsNeverSilentlyDropped:
 class TestThePublicSurface:
     """A caller that wants to CATCH a refusal must be able to name it."""
 
-    @pytest.mark.parametrize("name", ["RecordReadError",
-                                      "UnlockablePlatformError"])
-    def test_the_new_exceptions_are_importable(self, name):
-        assert hasattr(nullbar, name), f"nullbar.{name} is not exported"
-        assert name in nullbar.__all__
+    def test_every_exception_the_package_defines_is_exported(self):
+        """DERIVED, not listed. The first version of this test carried a
+        hardcoded pair of names, and the very next exception added to the
+        package was missed — a mutation removing it from ``__all__``
+        survived. A caller that wants to CATCH a refusal must be able to
+        name it, so the rule is every exception, not a list I maintain.
+        """
+        import importlib
+        import inspect
+        import pkgutil
+
+        found = {}
+        for mod in pkgutil.iter_modules(nullbar.__path__):
+            if mod.name.startswith("_") and mod.name != "_records":
+                continue
+            m = importlib.import_module(f"nullbar.{mod.name}")
+            for name, obj in vars(m).items():
+                if (inspect.isclass(obj) and issubclass(obj, BaseException)
+                        and obj.__module__.startswith("nullbar")
+                        and not name.startswith("_")):
+                    found[name] = obj.__module__
+        missing = {n: mod for n, mod in found.items()
+                   if n not in nullbar.__all__}
+        assert not missing, f"defined but not exported: {missing}"
+
+    def test_everything_exported_actually_resolves(self):
+        assert [n for n in nullbar.__all__ if not hasattr(nullbar, n)] == []
 
     def test_record_read_error_is_still_an_oserror(self):
         # existing handlers catch OSError; narrowing that would turn a
         # handled refusal into an unhandled crash for every current caller
         assert issubclass(nullbar.RecordReadError, OSError)
 
-    def test_everything_in_all_actually_exists(self):
-        assert [n for n in nullbar.__all__ if not hasattr(nullbar, n)] == []
 
     def test_a_dangling_symlink_is_refused_not_recursed(self, tmp_path):
         """``exists()`` follows the link and is False, so control reached
@@ -1450,3 +1470,75 @@ class TestThePublicSurface:
             cells_budget=1)
         with pytest.raises(FileExistsError):
             reg.freeze(p)
+
+    def test_no_hard_links_fails_closed(self, tmp_path):
+        """The first version fell back to a create-then-write and called it
+        graceful degradation. That reinstates the exact race the atomic
+        path exists to remove — the same silent downgrade this release
+        already fixed once in the ledger's lock, written four hours later
+        in another file."""
+        p = tmp_path / "reg.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+
+        def unsupported(*a, **k):
+            raise NotImplementedError("no hard links here")
+
+        with mock.patch.object(os, "link", unsupported):
+            with pytest.raises(nullbar.AtomicPublishUnsupportedError,
+                               match="allow_nonatomic"):
+                reg.freeze(p)
+        assert not p.exists(), "left a file behind after refusing"
+        assert list(tmp_path.iterdir()) == [], "left a temp file behind"
+
+    @pytest.mark.parametrize("exc", [NotImplementedError("x"),
+                                     PermissionError("x"),
+                                     OSError("x"),
+                                     AttributeError("x")])
+    def test_every_link_failure_fails_closed(self, tmp_path, exc):
+        # every route into the fallback, not just the one that was reported
+        p = tmp_path / "reg.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+
+        def failing(*a, **k):
+            raise exc
+
+        with mock.patch.object(os, "link", failing):
+            with pytest.raises(nullbar.AtomicPublishUnsupportedError):
+                reg.freeze(p)
+
+    def test_the_downgrade_is_available_but_must_be_asked_for(self, tmp_path):
+        p = tmp_path / "reg.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+
+        def unsupported(*a, **k):
+            raise NotImplementedError("no hard links here")
+
+        with mock.patch.object(os, "link", unsupported):
+            reg.freeze(p, allow_nonatomic=True)
+        assert json.loads(p.read_text())["design"]["v"] == 1
+
+    def test_a_taken_name_is_still_a_refusal_not_a_platform_error(self,
+                                                                  tmp_path):
+        # FileExistsError must reach the caller as itself; collapsing it
+        # into the platform error would turn "someone got there first" into
+        # "your filesystem is broken"
+        p = tmp_path / "reg.json"
+        nullbar.Registration(
+            name="first", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        with pytest.raises(FileExistsError) as ei:
+            nullbar.Registration(
+                name="second", hypothesis="h", design={"v": 2},
+                bar={"t": {"metric": "t", "op": ">=", "value": 9.0}},
+                cells_budget=1).freeze(p)
+        assert not isinstance(ei.value, nullbar.AtomicPublishUnsupportedError)

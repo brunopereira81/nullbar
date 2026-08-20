@@ -1280,3 +1280,31 @@ class TestEveryCommitTargetIsCheckedFirst:
         led.write_text("")
         assert cli.main(["anchor", str(p), "--ledger", str(led),
                          "--commit"]) == 0
+
+    def test_an_undecodable_committed_sidecar_says_so(self, tmp_path):
+        """``was = {}`` on a decode failure leaves the move-detection loop
+        with no iterations, so every move goes undetected — in silence,
+        which is the same shape as the junk-ENTRY case handled inside it.
+        Found by sweeping for the class, not by hitting it."""
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+
+        side = tmp_path / "r.anchor.json"
+        side.write_bytes(b"\xff\xfe not decodable at all \x00")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "junk"], cwd=tmp_path,
+                       check=True)
+        nullbar.anchor(p)          # a VALID one in the working tree
+
+        out = verify_anchor(p)
+        assert any("could not be decoded" in n for n in out["notes"]), \
+            out["notes"]

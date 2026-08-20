@@ -104,7 +104,19 @@ def _condition_state(value: Any) -> str:
     return "invalid"
 
 
-def _publish_atomically(path: Path, payload: str) -> None:
+class AtomicPublishUnsupportedError(RuntimeError):
+    """This filesystem cannot publish a registration atomically.
+
+    Raised instead of quietly falling back to a create-then-write, which
+    reinstates the very race the atomic path exists to remove. Pass
+    ``freeze(..., allow_nonatomic=True)`` to accept that on a filesystem
+    where you know no second writer exists — which puts the accepted
+    weakening in the caller's code rather than in ours.
+    """
+
+
+def _publish_atomically(path: Path, payload: str, *,
+                        allow_nonatomic: bool = False) -> None:
     """Create ``path`` holding ``payload``, atomically and exclusively.
 
     ``open("x")`` gives exclusivity and NOT atomicity: the final path
@@ -119,10 +131,13 @@ def _publish_atomically(path: Path, payload: str) -> None:
     fails outright if the name is taken. A reader therefore sees the path
     either absent or complete, never in between.
 
-    Where hard links are unavailable the exclusive create is used instead
-    — exclusivity is the property that protects the frozen record, and
-    losing atomicity narrows to a race that needs two processes freezing
-    the same path at once.
+    Where hard links are unavailable this RAISES. The first version fell
+    back to the exclusive create and called that graceful degradation; it
+    is the same silent downgrade this release already fixed once in the
+    ledger's lock, written four hours later in another file. A fallback
+    that reinstates the defect its own helper promises to remove is not a
+    fallback, and a guarantee that evaporates on a platform the docs never
+    excluded is worse than one that was never claimed.
     """
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
                                     prefix=f".{path.name}.", suffix=".tmp")
@@ -134,12 +149,17 @@ def _publish_atomically(path: Path, payload: str) -> None:
             os.fsync(fh.fileno())
         try:
             os.link(tmp_name, str(path))
-        except (AttributeError, NotImplementedError, PermissionError,
-                OSError) as exc:
-            if isinstance(exc, FileExistsError):
-                raise                      # the name is taken: the caller
-                                           # decides, and that is the point
-            with path.open("x") as fh:     # pragma: no cover - no hardlinks
+        except FileExistsError:
+            raise                    # the name is taken: the caller decides
+        except (AttributeError, NotImplementedError, OSError) as exc:
+            if not allow_nonatomic:
+                raise AtomicPublishUnsupportedError(
+                    f"cannot publish {path} atomically on this filesystem "
+                    f"({type(exc).__name__}: {exc}). A create-then-write "
+                    "would expose the final name before its contents and "
+                    "reinstate the race this avoids. Pass "
+                    "allow_nonatomic=True to accept that.") from exc
+            with path.open("x") as fh:     # pragma: no cover - opted in
                 fh.write(payload)
     finally:
         tmp.unlink(missing_ok=True)
@@ -220,10 +240,18 @@ class Registration:
         return json.dumps({k: v for k, v in doc.items() if k != "created_at"},
                           indent=2, sort_keys=True, default=str)
 
-    def freeze(self, path: str | Path) -> str:
+    def freeze(self, path: str | Path, *,
+               allow_nonatomic: bool = False) -> str:
         """Write the registration; returns its sha256. Refuses to overwrite
         an existing registration with different content — a frozen design
-        does not get edited, it gets superseded by a NEW registration."""
+        does not get edited, it gets superseded by a NEW registration.
+
+        ``allow_nonatomic`` accepts a create-then-write on a filesystem
+        without hard links, where the final name becomes visible before its
+        contents. Off by default: that race is what publication was made
+        atomic to remove, and downgrading it silently is how a guarantee
+        disappears without anybody being told.
+        """
         p = Path(path)
         payload = self._payload()
         digest = hashlib.sha256(payload.encode()).hexdigest()
@@ -284,7 +312,8 @@ class Registration:
             # different one is refused, which is the answer either caller
             # would have got had they arrived second.
             try:
-                _publish_atomically(p, payload)
+                _publish_atomically(p, payload,
+                                    allow_nonatomic=allow_nonatomic)
             except FileExistsError:
                 # Someone won the race between the exists() above and here.
                 # Re-enter ONCE, not recursively: the first version called
@@ -295,7 +324,7 @@ class Registration:
                     raise FileExistsError(
                         f"{p} cannot be created and does not resolve to a "
                         "readable registration") from None
-                return self.freeze(p)
+                return self.freeze(p, allow_nonatomic=allow_nonatomic)
         self.path, self.sha256 = p, digest
         return digest
 

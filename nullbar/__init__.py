@@ -21,6 +21,7 @@ __version__ = "0.7.1"
 from ._records import RecordReadError
 from .ledger import TrialLedger, UnlockablePlatformError
 from .registration import (AlreadySpentError, AmbiguousConditionError,
+                           AtomicPublishUnsupportedError,
                            BarMismatchError, Registration, SealBrokenError,
                            spec_text)
 from .stats import (clustered_t, dsr, expected_max_abs_t,
@@ -41,6 +42,7 @@ __all__ = [
     # nullbar.RecordReadError` raised AttributeError and the only way in
     # was a private module.
     "RecordReadError", "UnlockablePlatformError",
+    "AtomicPublishUnsupportedError",
     "TrialLedger", "Registration", "AlreadySpentError", "SealBrokenError",
     "AmbiguousConditionError", "BarMismatchError", "spec_text",
     "clustered_t", "sharpe", "psr", "dsr", "expected_max_sharpe",
