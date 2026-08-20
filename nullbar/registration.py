@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._records import loads_mapping, record_text
+from ._records import RecordReadError, loads_mapping, record_text
 
 
 class AlreadySpentError(RuntimeError):
@@ -102,6 +102,64 @@ def _condition_state(value: Any) -> str:
         # singleton, which is exactly how a failing bar reads as PASS.
         return "true" if bool(value) else "false"
     return "invalid"
+
+
+def validate_registration(doc: dict, what: str = "registration") -> dict:
+    """LAYER 2: is this parsed object actually a registration?
+
+    Layer 1 answers "can I parse this file" — broken JSON, an empty file, a
+    device, something oversized. It says nothing about SHAPE, so ``{}``
+    parsed happily and then ``verdict()`` raised ``KeyError: 'bar'`` out of
+    ``nullbar report``, and a bar condition missing its ``op`` raised
+    ``KeyError: 'op'`` from inside grading. ``load()`` bypasses
+    ``__init__``, so nothing had ever checked a registration that arrived
+    from disk rather than from code.
+
+    Validated once, here, at the boundary where untrusted contents enter,
+    so everything downstream may assume these fields exist and are usable.
+
+    Raises ``RecordReadError`` — the same type layer 1 raises, and an
+    ``OSError``, so every handler that already refuses an unreadable record
+    refuses this one too. Adding a new exception type would have meant
+    updating every catch site, and missing one is this week's failure mode.
+
+    Deliberately NOT rejected here: an empty ``bar`` (a record frozen
+    before that was refused must still be readable, and reads INCOMPLETE),
+    and an unusable ``cells_budget`` (the report already refuses it by name
+    and can say more about it than this can).
+    """
+    if "bar" not in doc:
+        raise RecordReadError(
+            f"the {what} has no 'bar' — there is nothing to grade, and "
+            "every verdict reads from it")
+    bar = doc["bar"]
+    if not isinstance(bar, dict):
+        raise RecordReadError(
+            f"the {what}'s 'bar' is a {type(bar).__name__}, not a mapping "
+            "of condition-name to requirement")
+    for cond, req in bar.items():
+        if isinstance(req, str):
+            continue                       # prose: graded by the caller
+        if not isinstance(req, dict):
+            raise RecordReadError(
+                f"the {what}'s bar[{cond!r}] is a {type(req).__name__} — a "
+                "requirement is a prose string or a spec mapping")
+        missing = {"metric", "op", "value"} - set(req)
+        if missing:
+            raise RecordReadError(
+                f"the {what}'s bar[{cond!r}] is missing {sorted(missing)} — "
+                "a spec needs a metric, an op and a value")
+        if req["op"] not in _OPS:
+            raise RecordReadError(
+                f"the {what}'s bar[{cond!r}] op {req['op']!r} is not one of "
+                f"{sorted(_OPS)}")
+    for field, kind in (("name", str), ("hypothesis", str),
+                        ("created_at", str), ("design", dict)):
+        if field in doc and not isinstance(doc[field], kind):
+            raise RecordReadError(
+                f"the {what}'s {field!r} is a {type(doc[field]).__name__}, "
+                f"expected {kind.__name__}")
+    return doc
 
 
 class AtomicPublishUnsupportedError(RuntimeError):
@@ -333,7 +391,8 @@ class Registration:
         p = Path(path)
         text = record_text(p, "registration")
         r = Registration.__new__(Registration)
-        r.doc = loads_mapping(text, "registration")
+        r.doc = validate_registration(
+            loads_mapping(text, "registration"))
         r.path = p
         r.sha256 = hashlib.sha256(text.encode()).hexdigest()
         return r
@@ -367,7 +426,8 @@ class Registration:
                 f"hashes to {in_memory[:16]}… — the design or the bar moved "
                 "after freezing. Grade the frozen file "
                 "(Registration.load(path)) or write a NEW registration.")
-        return loads_mapping(text, "registration")
+        return validate_registration(
+            loads_mapping(text, "registration"))
 
     def _stamp_path(self, reg_path: str | Path) -> Path:
         return Path(reg_path).with_suffix(".test_look.json")

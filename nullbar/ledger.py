@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from ._records import check_record, loads_mapping
+from ._records import RecordReadError, check_record, loads_mapping
 
 try:                                   # POSIX
     import fcntl
@@ -128,6 +128,41 @@ class TrialLedger:
             finally:
                 handle.close()
 
+    #: What a row must carry to be a trial at all: the identity dedup and
+    #: the count are computed from, plus the shapes downstream reads.
+    _ROW_SCHEMA = (("hash", str), ("name", str), ("params", dict))
+    _ROW_OPTIONAL = (("note", str), ("metrics", dict), ("at", str))
+
+    def _validate_row(self, row: dict[str, Any], line_no: int) -> dict[str, Any]:
+        """LAYER 2 for a ledger line: is this parsed object a trial?
+
+        ``{}`` parses, so it was COUNTED as a trial — and the count feeds
+        every deflation figure — and then the next ``record()`` died on
+        ``KeyError: 'hash'`` while deduplicating against it.
+
+        A malformed row rejects the whole ledger. Not skipped, not counted,
+        not repaired: a count that quietly excludes a row it could not read
+        is exactly the undercount this file's dedup fix was written for,
+        and guessing at a number the deflation divides by defeats the point
+        of keeping one.
+        """
+        where = f"{self.path}:{line_no}"
+        for field, kind in self._ROW_SCHEMA:
+            if field not in row:
+                raise RecordReadError(
+                    f"trial ledger row at {where} has no {field!r} — a row "
+                    "without it cannot be counted or deduplicated")
+            if not isinstance(row[field], kind) or isinstance(row[field], bool):
+                raise RecordReadError(
+                    f"trial ledger row at {where} has {field!r} as a "
+                    f"{type(row[field]).__name__}, expected {kind.__name__}")
+        for field, kind in self._ROW_OPTIONAL:
+            if field in row and not isinstance(row[field], kind):
+                raise RecordReadError(
+                    f"trial ledger row at {where} has {field!r} as a "
+                    f"{type(row[field]).__name__}, expected {kind.__name__}")
+        return row
+
     # ── reading ─────────────────────────────────────────────────────────────
     def _read_rows(self) -> list[dict[str, Any]]:
         """Parse the file. NO locking — callers already holding one use this
@@ -139,13 +174,15 @@ class TrialLedger:
         # building lines, which is the same failure as reading one whole
         check_record(self.path, "trial ledger")
         with self.path.open() as f:
-            for line in f:
+            for line_no, line in enumerate(f, start=1):
                 line = line.strip()
                 if line:
-                    # a row that is valid JSON but not an object is not a
-                    # trial; it would surface as an AttributeError on
-                    # .get() somewhere far from here
-                    rows.append(loads_mapping(line, "trial ledger row"))
+                    # layer 1: is it JSON, and an object at all — a row that
+                    # is valid JSON but not one would surface as an
+                    # AttributeError on .get() somewhere far from here.
+                    # layer 2: is that object a trial.
+                    rows.append(self._validate_row(
+                        loads_mapping(line, "trial ledger row"), line_no))
         return rows
 
     def _scan(self, force: bool = False) -> list[dict[str, Any]]:

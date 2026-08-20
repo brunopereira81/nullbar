@@ -20,6 +20,31 @@ machine down with it.
   not, which is the same fix-the-instance failure as the entries before the
   sidecar and the loop before the self-check. `nullbar report` catches the
   RuntimeErrors too, as a backstop.
+- **Parsing a record is not validating it.** Everything above answers
+  layer one — *can I read this file* — and nothing answered layer two: *is
+  this the kind of record I expect*. So `{}` loaded happily and
+  `verdict()` raised `KeyError: 'bar'` out of `nullbar report`, a bar
+  condition missing its `op` raised `KeyError: 'op'` from inside grading
+  (`load()` bypasses `__init__`, so a registration arriving from disk had
+  never been checked at all), and `{}` as a ledger row was **counted as a
+  trial** — feeding every deflation figure — before dying on
+  `KeyError: 'hash'` in the next `record()`.
+
+  Each record type now declares its minimum shape and is validated once,
+  at the boundary where untrusted contents enter, so downstream may rely on
+  the fields instead of re-checking them. A registration needs a `bar` that
+  is a mapping of well-formed requirements, and its optional fields are
+  type-checked; a ledger row needs the `hash`, `name` and `params` that
+  dedup and the count are computed from. A malformed row rejects the WHOLE
+  ledger, naming the file and line — not skipped, not counted, not
+  repaired, because a count that quietly drops a row it could not read is
+  the undercount this file's dedup fix exists to prevent, and the deflation
+  divides by that number. Refusals raise `RecordReadError` like layer one,
+  so every handler that already refuses an unreadable record refuses these.
+
+  Deliberately still accepted: an empty `bar` (a record frozen before that
+  was refused must remain readable, and reads INCOMPLETE) and a prose bar
+  (graded by the caller).
 - **Valid JSON that is not a record crashed verification.** `null`, `[]`,
   `42` and `"a string"` all PARSE — so every `except ValueError` upstream
   stayed quiet and the first attribute access died instead, giving

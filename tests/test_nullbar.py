@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 import nullbar
+from nullbar import cli
 from nullbar import (AlreadySpentError, AmbiguousConditionError,
                      BarMismatchError, LeakError,
                      Registration, SealBrokenError, TrialLedger,
@@ -1593,3 +1594,111 @@ class TestValidJSONThatIsNotARecord:
         from nullbar._records import loads_mapping
         with pytest.raises(OSError, match="not valid JSON"):
             loads_mapping("{not json", "x")
+
+
+class TestLayerTwoValidatesTheSHAPE:
+    """Two layers. Layer 1 asks "can I parse this file" — broken JSON, an
+    empty file, a device, something oversized. Layer 2 asks "is this parsed
+    object the kind of record I expect", and it did not exist: ``{}``
+    parsed happily and then ``verdict()`` raised ``KeyError: 'bar'`` out of
+    ``nullbar report``, while ``{}`` as a ledger row was COUNTED as a trial
+    — feeding the deflation — before dying on ``KeyError: 'hash'``.
+
+    Validated once at the boundary where untrusted contents enter, so
+    downstream can rely on the fields rather than re-checking them.
+    """
+
+    # ── the registration ────────────────────────────────────────────────
+    @pytest.mark.parametrize("payload,why", [
+        ("{not json", "malformed syntax"),
+        ("[]", "valid JSON, wrong shape"),
+        ("{}", "missing required field"),
+        ('{"bar": []}', "bar is not a mapping"),
+        ('{"bar": {"c": 7}}', "requirement is neither prose nor a spec"),
+        ('{"bar": {"c": {"metric": "t"}}}', "spec missing op and value"),
+        ('{"bar": {"c": {"metric": "t", "op": "~", "value": 1}}}', "bad op"),
+        ('{"bar": {}, "name": []}', "wrong field type"),
+        ('{"bar": {}, "design": "not a mapping"}', "wrong field type"),
+    ])
+    def test_a_registration_is_refused_at_load(self, tmp_path, payload, why):
+        p = tmp_path / "r.json"
+        p.write_text(payload)
+        with pytest.raises(OSError):
+            nullbar.Registration.load(p)
+
+    @pytest.mark.parametrize("payload", [
+        "{not json", "[]", "{}", '{"bar": []}',
+        '{"bar": {"c": {"metric": "t"}}}',
+    ])
+    def test_the_report_returns_a_refusal_not_a_traceback(self, tmp_path,
+                                                          payload, capsys):
+        p = tmp_path / "r.json"
+        p.write_text(payload)
+        assert cli.main(["report", str(p), "-o", str(tmp_path / "o.html")]) == 2
+        err = capsys.readouterr().err
+        assert "nullbar report:" in err and "Traceback" not in err
+
+    def test_a_prose_bar_is_still_accepted(self, tmp_path):
+        # prose conditions are graded by the caller and must survive
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps({"bar": {"c": "the researcher is satisfied"}}))
+        assert nullbar.Registration.load(p).doc["bar"]["c"]
+
+    def test_an_empty_bar_still_LOADS(self, tmp_path):
+        # deliberate: a record frozen before empty bars were refused must
+        # remain readable, and reads INCOMPLETE rather than being unopenable
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps({"bar": {}}))
+        assert nullbar.Registration.load(p).doc["bar"] == {}
+
+    def test_a_real_registration_round_trips(self, tmp_path):
+        p = tmp_path / "r.json"
+        nullbar.Registration(
+            name="x", hypothesis="h", design={"v": 1},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1).freeze(p)
+        assert nullbar.Registration.load(p).doc["name"] == "x"
+
+    # ── the ledger ──────────────────────────────────────────────────────
+    @pytest.mark.parametrize("row,why", [
+        ("{not json", "malformed syntax"),
+        ("[]", "valid JSON, wrong shape"),
+        ("{}", "missing every required field"),
+        ('{"name":"s","params":{}}', "missing hash"),
+        ('{"hash":"a","params":{}}', "missing name"),
+        ('{"hash":"a","name":"s"}', "missing params"),
+        ('{"hash":123,"name":"s","params":{}}', "hash wrong type"),
+        ('{"hash":"a","name":"s","params":[]}', "params wrong type"),
+        ('{"hash":"a","name":"s","params":{},"metrics":[]}', "metrics wrong type"),
+        ('{"hash":true,"name":"s","params":{}}', "bool is not a str"),
+    ])
+    def test_a_ledger_row_is_refused(self, tmp_path, row, why):
+        p = tmp_path / "t.jsonl"
+        p.write_text(row + "\n")
+        with pytest.raises(OSError):
+            nullbar.TrialLedger(p).count()
+
+    def test_a_bad_row_rejects_the_WHOLE_ledger(self, tmp_path):
+        """Not skipped, not counted, not repaired: a count that quietly
+        excludes a row it could not read is the undercount the dedup fix
+        was written for, and the deflation divides by that number."""
+        p = tmp_path / "t.jsonl"
+        good = json.dumps({"hash": "a", "name": "s", "params": {"q": 1},
+                           "note": "", "metrics": {}})
+        p.write_text(good + "\n{}\n" + good.replace('"a"', '"b"') + "\n")
+        with pytest.raises(OSError, match=r":2 "):
+            nullbar.TrialLedger(p).count()
+
+    def test_the_refusal_names_the_file_and_line(self, tmp_path):
+        p = tmp_path / "t.jsonl"
+        good = json.dumps({"hash": "a", "name": "s", "params": {}})
+        p.write_text(good + "\n" + good + "\n{}\n")
+        with pytest.raises(OSError) as ei:
+            nullbar.TrialLedger(p).count()
+        assert "t.jsonl:3" in str(ei.value)
+
+    def test_a_real_ledger_round_trips(self, tmp_path):
+        led = nullbar.TrialLedger(tmp_path / "t.jsonl")
+        for i in range(3):
+            led.record("s", {"q": i}, note="n", metrics={"sr": 0.1})
+        assert nullbar.TrialLedger(tmp_path / "t.jsonl").count() == 3
