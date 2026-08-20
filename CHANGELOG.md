@@ -9,6 +9,34 @@ machine down with it.
 
 ### Fixed
 
+- **The sidecar itself was read before any guard applied to it.** The
+  previous entry hardened the paths `verify_anchor` *derives* and left the
+  path it is *handed* wide open: the anchor record was parsed before the
+  repository was even resolved, so a tracked symlink named `*.anchor.json`
+  pointing at `/dev/zero` was read whole — the same unbounded read, one
+  layer out, through the front door. The checkout is resolved first now, the
+  sidecar must be an ordinary file whose resolved path stays inside it, and
+  only then is it parsed. "No anchor at all" still reads `unanchored` rather
+  than `unverifiable`, because those are different answers.
+- **Every record read is guarded, not just the anchor's.** The same hole was
+  open in nine other places — the registration, the test-look stamp and the
+  trial ledger are all just paths in a tree somebody else may have written,
+  and a ledger symlinked at an endless stream loops forever building lines
+  rather than reading one whole. `nullbar/_records.py` is now the single
+  reader: an ordinary file, under a generous size cap, or `RecordReadError`
+  (an `OSError`, so existing handlers degrade instead of crashing). It is
+  one function rather than a check per call site *because* the first version
+  was a check per call site and it missed the front door.
+- **The lock guarantee is no longer dropped silently off POSIX.** Without
+  `fcntl` the ledger quietly ran unlocked, restoring the very defect the
+  lock was written to close on a platform the docs never excluded. Windows
+  now takes an `msvcrt` byte-range lock (exclusive for readers too — it has
+  no shared mode: slower, never wrong). Where neither primitive exists,
+  `TrialLedger(...)` raises `UnlockablePlatformError` unless the caller
+  passes `require_lock=False`, which puts the accepted weakening in their
+  code rather than in ours. CI is ubuntu-only, so the Windows branch is
+  covered by driving the selection, not the platform — stated here because
+  "tested" and "implemented" are different words.
 - **Deleting an anchored entry still verified as intact.** The sidecar was
   compared against its committed copy, but an entry present in the commit
   and *absent* from the working file was skipped rather than rejected —

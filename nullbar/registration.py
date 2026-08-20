@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._records import record_text
+
 
 class AlreadySpentError(RuntimeError):
     """The single test look was already taken."""
@@ -183,7 +185,7 @@ class Registration:
         payload = self._payload()
         digest = hashlib.sha256(payload.encode()).hexdigest()
         if p.exists():
-            old = p.read_text()
+            old = record_text(p, "registration")
             if hashlib.sha256(old.encode()).hexdigest() != digest:
                 old_doc = json.loads(old)
                 if self._promise(old_doc) != self._promise(self.doc):
@@ -203,7 +205,7 @@ class Registration:
     @staticmethod
     def load(path: str | Path) -> "Registration":
         p = Path(path)
-        text = p.read_text()
+        text = record_text(p, "registration")
         r = Registration.__new__(Registration)
         r.doc = json.loads(text)
         r.path = p
@@ -218,7 +220,7 @@ class Registration:
 
     def _read(self, p: Path) -> tuple[str, str]:
         """(text, sha256) of the frozen file — one read per verdict."""
-        text = p.read_text()
+        text = record_text(p, "registration")
         return text, hashlib.sha256(text.encode()).hexdigest()
 
     def _frozen_doc(self, p: Path,
@@ -265,7 +267,7 @@ class Registration:
         if stamp.exists():
             out["test_look_spent"] = True
             try:
-                out["stamp_bound"] = (json.loads(stamp.read_text())
+                out["stamp_bound"] = (json.loads(record_text(stamp, "test-look stamp"))
                                       .get("registration_sha256")
                                       == out["sha256"])
             except (ValueError, OSError):
@@ -319,7 +321,7 @@ class Registration:
         into a crash.
         """
         try:
-            return str(json.loads(stamp.read_text())["at"])
+            return str(json.loads(record_text(stamp, "stamp"))["at"])
         except (OSError, ValueError, KeyError, TypeError):
             return "an unrecorded time (the stamp is unreadable)"
 

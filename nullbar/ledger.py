@@ -22,20 +22,48 @@ from typing import Any, Iterator
 
 import numpy as np
 
-try:                                   # POSIX only; Windows degrades below
+from ._records import check_record
+
+try:                                   # POSIX
     import fcntl
 except ImportError:                    # pragma: no cover - platform dependent
     fcntl = None                       # type: ignore[assignment]
+try:                                   # Windows
+    import msvcrt
+except ImportError:                    # pragma: no cover - platform dependent
+    msvcrt = None                      # type: ignore[assignment]
+
+#: Is there any cross-process lock on this platform? The first version of
+#: the dedup fix answered "no" by quietly running unlocked, which restores
+#: the exact defect it was written to close and tells nobody. A guarantee
+#: that evaporates on a platform the docs never excluded is worse than one
+#: that was never claimed.
+HAVE_LOCKING = fcntl is not None or msvcrt is not None
+
+
+class UnlockablePlatformError(RuntimeError):
+    """No cross-process file lock is available, so the ledger cannot keep
+    its "an identical pair is one trial" promise. Construct the ledger with
+    ``require_lock=False`` to proceed anyway — single-process use is
+    unaffected, and saying so in code is the point."""
 
 
 class TrialLedger:
     """Append-only record of evaluated strategy variants ("cells")."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, require_lock: bool = True) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._rows: list[dict[str, Any]] | None = None
         self._size: int = -1
+        if require_lock and not HAVE_LOCKING:      # pragma: no cover
+            raise UnlockablePlatformError(
+                "no cross-process file lock is available here (neither "
+                "fcntl nor msvcrt), so two workers recording the same "
+                "(name, params) can both append it and the trial count "
+                "every deflation figure divides by stops describing the "
+                "search. Pass require_lock=False to accept that.")
+        self._require_lock = require_lock
 
     @staticmethod
     def _hash(params: dict[str, Any]) -> str:
@@ -63,18 +91,30 @@ class TrialLedger:
         behaviour rather than failing: single-process use is unaffected, and
         the check that matters is documented as advisory either way.
         """
-        if fcntl is None:                        # pragma: no cover
-            yield None
+        if not HAVE_LOCKING:                     # pragma: no cover
+            yield None                           # opted in at construction
             return
         self.path.touch(exist_ok=True)
         handle = self.path.open("r+")
         try:
-            fcntl.flock(handle.fileno(),
-                        fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(),
+                            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            else:                                # pragma: no cover - Windows
+                # msvcrt has no shared mode, so a reader takes the exclusive
+                # lock too: slower, never wrong. LK_LOCK retries ~10s and
+                # then raises, which surfaces a stuck writer instead of
+                # silently proceeding without the lock.
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
             yield handle
         finally:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                else:                            # pragma: no cover - Windows
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             finally:
                 handle.close()
 
@@ -85,6 +125,9 @@ class TrialLedger:
         rows: list[dict[str, Any]] = []
         if not self.path.exists():
             return rows
+        # a ledger symlinked at an endless stream would loop here forever,
+        # building lines, which is the same failure as reading one whole
+        check_record(self.path, "trial ledger")
         with self.path.open() as f:
             for line in f:
                 line = line.strip()

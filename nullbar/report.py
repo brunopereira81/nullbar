@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from ._records import record_text
 from .anchor import verify_anchor
 from .ledger import TrialLedger
 from .registration import (BarMismatchError, Registration, _condition_state,
@@ -133,7 +134,7 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
     if not path.exists():
         raise FileNotFoundError(f"no registration at {path}")
     reg = Registration.load(path)
-    frozen_text = path.read_text()
+    frozen_text = record_text(path, "registration")
     doc = reg.doc
     gaps: list[str] = []
     findings: list[str] = []
@@ -144,7 +145,8 @@ def report_data(reg_path: str | Path, ledger_path: str | Path | None = None,
     stamp: dict[str, Any] | None = None
     if stamp_path.exists():
         try:
-            loaded = json.loads(stamp_path.read_text())
+            loaded = json.loads(record_text(stamp_path,
+                                            "test-look stamp"))
             stamp = loaded if isinstance(loaded, dict) else None
             if stamp is None:
                 findings.append(

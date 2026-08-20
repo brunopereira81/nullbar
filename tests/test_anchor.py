@@ -863,3 +863,77 @@ class TestAnUnboundedReadCannotHappen:
         p = self._repo_with(tmp_path, "r.json")
         out = verify_anchor(p)
         assert not any("not an ordinary file" in f for f in out["findings"])
+
+
+class TestTheSidecarItselfIsGuarded:
+    """The guards applied to paths the code DERIVED, and none to the path it
+    was HANDED.
+
+    A tracked symlink named ``*.anchor.json`` pointing at ``/dev/zero`` was
+    read whole — the same unbounded read that had just been fixed one layer
+    in, arriving through the front door, because the sidecar was parsed
+    before the repository was even resolved.
+    """
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=tmp_path, check=True)
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        p = tmp_path / "r.json"
+        reg.freeze(p)
+        return p
+
+    def test_a_sidecar_symlinked_to_an_endless_stream_is_not_read(
+            self, tmp_path):
+        p = self._repo(tmp_path)
+        (tmp_path / "r.anchor.json").symlink_to("/dev/zero")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        opened = []
+        real = Path.read_text
+
+        def watched(self, *a, **k):
+            opened.append(str(self))
+            return real(self, *a, **k)
+
+        with mock.patch.object(Path, "read_text", watched):
+            out = verify_anchor(p)
+        assert out["status"] == "unverifiable"
+        assert not any("anchor.json" in o for o in opened), opened
+
+    def test_a_sidecar_resolving_outside_the_checkout_is_refused(self,
+                                                                 tmp_path):
+        p = self._repo(tmp_path)
+        elsewhere = tmp_path.parent / "planted.json"
+        elsewhere.write_text('{"kind": "git", "entries": {}}')
+        (tmp_path / "r.anchor.json").symlink_to(elsewhere)
+        out = verify_anchor(p)
+        assert out["status"] == "unverifiable"
+        assert any("outside the checkout" in f for f in out["findings"])
+
+    def test_a_sidecar_that_is_a_directory_is_refused(self, tmp_path):
+        p = self._repo(tmp_path)
+        (tmp_path / "r.anchor.json").mkdir()
+        out = verify_anchor(p)
+        assert out["status"] == "unverifiable"
+
+    def test_an_ordinary_sidecar_still_verifies(self, tmp_path):
+        # the guard must not refuse the case it exists to let through
+        p = self._repo(tmp_path)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "f"], cwd=tmp_path, check=True)
+        nullbar.anchor(p)
+        assert verify_anchor(p)["status"] in ("intact", "broken")
+        assert not any("outside the checkout" in f
+                       for f in verify_anchor(p)["findings"])
+
+    def test_no_anchor_at_all_is_still_unanchored_not_unverifiable(self,
+                                                                   tmp_path):
+        # reordering must not turn "there is no anchor" into "we could not
+        # check the anchor" — they are different answers
+        p = self._repo(tmp_path)
+        assert verify_anchor(p)["status"] == "unanchored"

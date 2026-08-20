@@ -39,6 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._records import (RecordReadError, check_record, record_bytes,
+                       record_text)
+
 ANCHOR_SUFFIX = ".anchor.json"
 
 #: Roles an anchor covers, and where each lives relative to the
@@ -127,7 +130,7 @@ def _entry(path: Path, repo: Path) -> dict[str, Any]:
             f"{rel} is not in this repository's history — commit it first "
             f"(git add {rel} && git commit), or pass --commit")
     return {"path": rel, "commit": commit,
-            "sha256": _sha256(path.read_bytes()),
+            "sha256": _sha256(record_bytes(path, "record")),
             "committed_at": _git(["show", "-s", "--format=%cI", commit],
                                  repo)}
 
@@ -280,15 +283,17 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
                            "entries": {}, "findings": [], "notes": [],
                            "ordering": None, "witnessed": False}
     if not side.exists():
-        return out
-    try:
-        doc = json.loads(side.read_text())
-        entries = doc["entries"]
-        out["anchored_in"] = doc.get("repo")
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        out["status"] = "unverifiable"
-        out["findings"].append(f"the anchor sidecar is unreadable ({exc})")
-        return out
+        return out          # an existence test opens nothing
+
+    # ORDER MATTERS, and it did not before: the sidecar was parsed first and
+    # the repository resolved afterwards, so every guard below applied to
+    # paths this function DERIVED and none of them to the path it was
+    # HANDED. A tracked symlink named `*.anchor.json` pointing at /dev/zero
+    # was therefore read whole — the same unbounded read that had just been
+    # fixed one layer in, arriving through the front door. Resolve the
+    # checkout, prove the sidecar is an ordinary file inside it, and only
+    # then read it.
+    #
     # The repository is the one holding the file under inspection, NOT the
     # absolute path recorded at anchor time. A third party verifies by
     # cloning — to a path of their choosing — and the recorded path is
@@ -301,6 +306,26 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
         out["findings"].append(
             f"{reg} is not inside a git repository here ({exc}) — an "
             "anchor can only be checked from a checkout that carries it")
+        return out
+
+    try:
+        rel = side.resolve().relative_to(repo.resolve())
+    except (ValueError, OSError):
+        out["status"] = "unverifiable"
+        out["findings"].append(
+            f"the anchor sidecar {side} resolves outside the checkout at "
+            f"{repo} — an anchor is a record in the repository it attests "
+            "to, and nullbar will not follow it out of one")
+        return out
+    del rel
+
+    try:
+        doc = json.loads(record_text(side, "anchor sidecar"))
+        entries = doc["entries"]
+        out["anchored_in"] = doc.get("repo")
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        out["status"] = "unverifiable"
+        out["findings"].append(f"the anchor sidecar is unreadable ({exc})")
         return out
 
     if isinstance(entries, dict):
@@ -347,7 +372,7 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
         # verifying a different one would answer a question nobody asked.
         disk = reg if role == "registration" else (repo / rel)
         readable = _regular(disk)
-        disk_bytes = disk.read_bytes() if readable else None
+        disk_bytes = record_bytes(disk, role) if readable else None
         on_disk = _sha256(disk_bytes) if disk_bytes is not None else None
         if disk.exists() and not readable:
             broken = True
@@ -459,7 +484,8 @@ def verify_anchor(reg_path: str | Path) -> dict[str, Any]:
     else:
         side_commit = _last_commit(side_rel, repo)
         side_blob = _blob(side_commit, side_rel, repo) if side_commit else None
-        if side_blob is not None and side_blob != side.read_bytes():
+        if side_blob is not None and side_blob != record_bytes(
+                side, "anchor record"):
             # Every claim above was read out of the working-tree sidecar,
             # which is the one file an editor can reach. Re-anchoring
             # legitimately rewrites it — but re-anchoring only ADDS roles or

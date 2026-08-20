@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1109,3 +1111,112 @@ def _record_distinct(args):
 def _record_same(args):
     path, _ = args
     nullbar.TrialLedger(path).record("collide", {"q": 1})
+
+
+class TestRecordReadsAreGuardedEverywhere:
+    """Every path this package opens is, in the case that matters, supplied
+    by somebody else — you clone a repository and run nullbar on what it
+    ships. The first fix guarded the anchor's entry paths; the sidecar, the
+    registration, the stamp and the ledger were all still read blind."""
+
+    def test_a_registration_pointing_at_a_device_is_refused(self, tmp_path):
+        p = tmp_path / "reg.json"
+        p.symlink_to("/dev/zero")
+        with pytest.raises(OSError, match="not an ordinary file"):
+            nullbar.Registration.load(p)
+
+    def test_a_ledger_pointing_at_a_device_is_refused(self, tmp_path):
+        p = tmp_path / "t.jsonl"
+        p.symlink_to("/dev/zero")
+        with pytest.raises(OSError, match="not an ordinary file"):
+            nullbar.TrialLedger(p).count()
+
+    def test_an_oversized_record_is_refused_by_size(self, tmp_path):
+        from nullbar import _records
+        p = tmp_path / "big.json"
+        p.write_text("x" * 4096)
+        with mock.patch.object(_records, "MAX_RECORD_BYTES", 1024):
+            with pytest.raises(OSError, match="over the"):
+                _records.record_text(p, "record")
+
+    def test_an_ordinary_record_is_unaffected(self, tmp_path):
+        from nullbar import _records
+        p = tmp_path / "ok.json"
+        p.write_text('{"a": 1}')
+        assert _records.record_text(p, "record") == '{"a": 1}'
+
+    def test_a_symlink_to_a_REAL_file_still_works(self, tmp_path):
+        # symlinks are an ordinary way to lay out a repo; what is refused
+        # is what they point AT
+        from nullbar import _records
+        real = tmp_path / "real.json"
+        real.write_text('{"a": 1}')
+        link = tmp_path / "link.json"
+        link.symlink_to(real)
+        assert _records.record_text(link, "record") == '{"a": 1}'
+
+
+class TestTheLockGuaranteeIsNeverSilentlyDropped:
+    """A guarantee that evaporates on a platform the docs never excluded is
+    worse than one that was never claimed. The first version ran unlocked
+    wherever ``fcntl`` was missing and told nobody."""
+
+    def test_no_locking_primitive_refuses_by_default(self, tmp_path):
+        from nullbar import ledger as L
+        with mock.patch.object(L, "HAVE_LOCKING", False):
+            with pytest.raises(L.UnlockablePlatformError, match="deflation"):
+                L.TrialLedger(tmp_path / "t.jsonl")
+
+    def test_the_downgrade_must_be_asked_for_in_code(self, tmp_path):
+        from nullbar import ledger as L
+        with mock.patch.object(L, "HAVE_LOCKING", False):
+            led = L.TrialLedger(tmp_path / "t.jsonl", require_lock=False)
+            led.record("s", {"q": 1})
+            assert led.count() == 1          # usable, just not concurrent-safe
+
+    def test_windows_takes_the_msvcrt_path(self, tmp_path):
+        """CI is ubuntu-only, so the Windows branch is exercised by driving
+        the selection with fcntl absent and a stand-in msvcrt — the plumbing
+        is covered even though the platform is not."""
+        from nullbar import ledger as L
+        calls = []
+
+        class FakeMsvcrt:
+            LK_LOCK, LK_UNLCK = 1, 0
+
+            @staticmethod
+            def locking(fd, mode, nbytes):
+                calls.append(mode)
+
+        with mock.patch.object(L, "fcntl", None), \
+                mock.patch.object(L, "msvcrt", FakeMsvcrt), \
+                mock.patch.object(L, "HAVE_LOCKING", True):
+            led = L.TrialLedger(tmp_path / "t.jsonl")
+            led.record("s", {"q": 1})
+        assert calls == [FakeMsvcrt.LK_LOCK, FakeMsvcrt.LK_UNLCK], calls
+        assert (tmp_path / "t.jsonl").read_text().count("\n") == 1
+
+    def test_freezing_over_a_device_is_refused(self, tmp_path):
+        # freeze() reads an existing file at the target to decide whether it
+        # is the same registration; a planted symlink there is a read of
+        # whatever it points at
+        p = tmp_path / "reg.json"
+        p.symlink_to("/dev/zero")
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        with pytest.raises(OSError, match="not an ordinary file"):
+            reg.freeze(p)
+
+    def test_sealing_against_a_device_is_refused(self, tmp_path):
+        # _read backs seal_status and verdict, reachable with an explicit
+        # reg_path that differs from the one the object was frozen at
+        p = tmp_path / "reg.json"
+        p.symlink_to("/dev/zero")
+        reg = nullbar.Registration(
+            name="r", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        with pytest.raises(OSError, match="not an ordinary file"):
+            reg.seal_status(p)
