@@ -16,6 +16,8 @@ import json
 import math
 from typing import Any
 
+from ._records import finite_float
+
 _STATUS_NOTE = {
     "PASS": "Every registered condition was met, graded against the frozen "
             "file.",
@@ -77,8 +79,21 @@ footer { margin-top:2.6rem; border-top:1px solid var(--rule);
 
 
 def _is_num(value: Any) -> bool:
-    return (not isinstance(value, bool) and isinstance(value, (int, float))
-            and math.isfinite(value))
+    """Is this a real, finite number?
+
+    Through ``finite_float``, like every other untrusted number: this
+    called ``math.isfinite`` directly, and a fill leg of ``10**400``
+    raised ``OverflowError`` out of ``render_html``.
+
+    It hid behind a short circuit. The one caller reads
+    ``_is_num(touch) and touch <= 0 and _is_num(assumed) and ...`` — so an
+    oversized ASSUMED leg is never reached (``touch <= 0`` is already
+    False and Python stops), while an oversized TOUCH leg crashes on the
+    first term. A probe that put the big number in the assumed leg
+    therefore rendered fine, and I concluded from it that fill legs were
+    safe. One of two positions is not both.
+    """
+    return finite_float(value) is not None
 
 
 def _esc(value: Any) -> str:

@@ -29,6 +29,17 @@ machine down with it.
   helper now, `finite_float`, which also excludes bools (`float(True)` is
   `1.0`, and `True` is not a measurement).
 
+  The HTML renderer's `_is_num` was a sixth, and it hid behind a SHORT
+  CIRCUIT: its one caller reads
+  `_is_num(touch) and touch <= 0 and _is_num(assumed) and …`, so an
+  oversized **assumed** leg is never reached — `touch <= 0` is already
+  False and Python stops — while an oversized **touch** leg raises
+  `OverflowError` on the first term. A probe that put the big number in
+  the assumed leg rendered fine, and "fill legs render safely" was
+  concluded from it. Every leaf of a realistic test-look payload is now
+  walked and made oversized in turn, as a test, because two rounds running
+  a few hand-picked positions were mistaken for the class.
+
   The ledger's Sharpe was the fifth of those five sites, named in the
   commit message of the fix that migrated the other four and then not
   migrated — `metrics: {"sr": 10**400}` still raised a numpy TypeError and

@@ -591,3 +591,110 @@ class TestEvidenceMustSupportThePass:
         led.record("strategy_A", {"name": "shared", "q": 0.1})
         led.record("strategy_A", {"name": "shared", "q": 0.1})
         assert led.count() == 1
+
+
+class TestOversizedFillLegsRender:
+    """``_is_num`` called ``math.isfinite`` directly, so a fill leg of
+    ``10**400`` raised ``OverflowError`` out of ``render_html``.
+
+    It hid behind a short circuit. The caller reads
+    ``_is_num(touch) and touch <= 0 and _is_num(assumed) and ...`` — an
+    oversized ASSUMED leg is never reached, because ``touch <= 0`` is
+    already False and Python stops; an oversized TOUCH leg crashes on the
+    first term. A probe that put the big number in the assumed leg rendered
+    fine, and "fill legs are safe" was concluded from it. One of two
+    positions is not both, so both are here.
+    """
+
+    BIG = 10 ** 400
+
+    def _render(self, tmp_path, fills):
+        p = tmp_path / "r.json"
+        reg = nullbar.Registration(
+            name="x", hypothesis="h", design={},
+            bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+            cells_budget=1)
+        reg.freeze(p)
+        reg.spend_test_look(p, results={"t": 5.0, "clusters": 50,
+                                        "fills": fills})
+        return nullbar.render_html(report_data(p, sims=50))
+
+    @pytest.mark.parametrize("fills", [
+        {"assumed": {"gross": 10 ** 400}, "touch": {"gross": 1.0}},
+        {"assumed": {"gross": 1.0}, "touch": {"gross": 10 ** 400}},
+        {"assumed": {"gross": 10 ** 400}, "touch": {"gross": 10 ** 400}},
+        {"assumed": {"gross": -(10 ** 400)}, "touch": {"gross": -1.0}},
+        {"assumed": {"gross": 1.0}, "touch": {"gross": 10 ** 400},
+         "through": {"gross": 10 ** 400}},
+    ])
+    def test_every_position_renders(self, tmp_path, fills):
+        assert len(self._render(tmp_path, fills)) > 1000
+
+    def test_the_negative_touch_note_still_fires(self, tmp_path):
+        # the guard must not break the case _is_num exists to decide
+        html = self._render(tmp_path, {"assumed": {"gross": 2.0},
+                                       "touch": {"gross": -0.5}})
+        assert "no gross left to haircut" in html
+
+    def test_it_does_not_fire_on_a_healthy_bracket(self, tmp_path):
+        html = self._render(tmp_path, {"assumed": {"gross": 2.0},
+                                       "touch": {"gross": 1.5}})
+        assert "no gross left to haircut" not in html
+
+    @pytest.mark.parametrize("value", [10 ** 400, float("nan"),
+                                       float("inf"), True, "1.0", None])
+    def test_is_num_refuses_everything_unusable(self, value):
+        from nullbar.report_html import _is_num
+        assert _is_num(value) is False
+
+    @pytest.mark.parametrize("value", [0, -1, 2.5, 1e308])
+    def test_is_num_accepts_real_numbers(self, value):
+        from nullbar.report_html import _is_num
+        assert _is_num(value) is True
+
+    def test_every_leaf_of_a_payload_can_be_oversized(self, tmp_path):
+        """The generalisation this finding is really about.
+
+        Two rounds running I probed a few hand-picked positions and
+        concluded the class was covered — and the position I skipped was
+        the one that crashed, hidden behind a short circuit. So the payload
+        is walked and EVERY leaf is made oversized in turn, which is a
+        check rather than a claim.
+        """
+        import copy
+        base = {"t": 5.0, "clusters": 50, "trades": 900, "gross": 1.2,
+                "cluster_mean": 1.1, "per_year": {"2025": 1.0},
+                "null": {"max_abs_t_vs_expected": 0.2, "ok": True,
+                         "expected_gross": 0.1, "hold": {"gross": 0.1}},
+                "hold": {"gross": 0.1},
+                "fills": {"assumed": {"gross": 1.0, "n": 10},
+                          "touch": {"gross": 0.8, "n": 9},
+                          "through": {"gross": 0.6}},
+                "conditions": {"judgement": True}}
+
+        def leaves(obj, path=()):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    yield from leaves(v, path + (k,))
+            else:
+                yield path
+
+        def setin(obj, path, val):
+            d = obj
+            for k in path[:-1]:
+                d = d[k]
+            d[path[-1]] = val
+
+        paths = list(leaves(base))
+        assert len(paths) > 12, "the fixture must exercise a real payload"
+        for path in paths:
+            results = copy.deepcopy(base)
+            setin(results, path, self.BIG)
+            p = tmp_path / f"r_{'_'.join(path)}.json"
+            reg = nullbar.Registration(
+                name="x", hypothesis="h", design={},
+                bar={"t": {"metric": "t", "op": ">=", "value": 3.0}},
+                cells_budget=1)
+            reg.freeze(p)
+            reg.spend_test_look(p, results=results)
+            nullbar.render_html(report_data(p, sims=40))   # must not raise
